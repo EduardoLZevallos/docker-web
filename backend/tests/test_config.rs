@@ -3,7 +3,6 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use tempfile::tempdir;
-use test_log::test;
 use validator::Validate;
 
 // Helper function to create temporary config files for testing
@@ -15,7 +14,7 @@ fn create_test_config(content: &str) -> (tempfile::TempDir, PathBuf) {
     (dir, file_path)
 }
 
-#[test]
+#[test_log::test]
 fn load_valid_config_file_returns_config_object() {
     let config_content = r#"
         discovery_interval: 30
@@ -39,7 +38,7 @@ fn load_valid_config_file_returns_config_object() {
     assert!(config.auth.password_hash.is_none());
 }
 
-#[test]
+#[test_log::test]
 fn load_invalid_discovery_interval_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 1
@@ -57,7 +56,7 @@ fn load_invalid_discovery_interval_returns_validation_error() {
     assert!(matches!(result, Err(ConfigError::ValidationError(_))));
 }
 
-#[test]
+#[test_log::test]
 fn load_invalid_log_level_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 30
@@ -75,7 +74,7 @@ fn load_invalid_log_level_returns_validation_error() {
     assert!(matches!(result, Err(ConfigError::ValidationError(_))));
 }
 
-#[test]
+#[test_log::test]
 fn load_invalid_theme_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 30
@@ -93,7 +92,7 @@ fn load_invalid_theme_returns_validation_error() {
     assert!(matches!(result, Err(ConfigError::ValidationError(_))));
 }
 
-#[test]
+#[test_log::test]
 fn load_empty_username_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 30
@@ -111,7 +110,7 @@ fn load_empty_username_returns_validation_error() {
     assert!(matches!(result, Err(ConfigError::ValidationError(_))));
 }
 
-#[test]
+#[test_log::test]
 fn with_defaults_when_called_returns_default_config() {
     let config = Config::with_defaults();
     assert_eq!(config.discovery_interval, 30);
@@ -125,13 +124,13 @@ fn with_defaults_when_called_returns_default_config() {
     assert!(config.validate().is_ok());
 }
 
-#[test]
+#[test_log::test]
 fn load_nonexistent_file_returns_file_error() {
     let result = Config::load("/nonexistent/config.yaml");
     assert!(matches!(result, Err(ConfigError::FileError(_))));
 }
 
-#[test]
+#[test_log::test]
 fn load_invalid_yaml_returns_yaml_error() {
     let config_content = "invalid: yaml: content: [";
     let (_dir, config_path) = create_test_config(config_content);
