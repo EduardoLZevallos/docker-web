@@ -1,0 +1,140 @@
+use docker_web::config::{Config, ConfigError};
+use std::fs::File;
+use std::io::Write;
+use std::path::PathBuf;
+use tempfile::tempdir;
+use test_log::test;
+use validator::Validate;
+
+// Helper function to create temporary config files for testing
+fn create_test_config(content: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("config.yaml");
+    let mut file = File::create(&file_path).unwrap();
+    write!(file, "{}", content).unwrap();
+    (dir, file_path)
+}
+
+#[test]
+fn load_valid_config_file_returns_config_object() {
+    let config_content = r#"
+        discovery_interval: 30
+        docker_socket_path: "/var/run/docker.sock"
+        logging_level: "info"
+        log_file_path: "/var/log/app.log"
+        metrics_log_file_path: "/var/log/metrics.log"
+        frontend_theme: "light"
+        auth:
+          username: "admin"
+    "#;
+
+    let (_dir, config_path) = create_test_config(config_content);
+    let config = Config::load(config_path).unwrap();
+
+    assert_eq!(config.discovery_interval, 30);
+    assert_eq!(config.docker_socket_path, "/var/run/docker.sock");
+    assert_eq!(config.logging_level, "info");
+    assert_eq!(config.frontend_theme, "light");
+    assert_eq!(config.auth.username, "admin");
+    assert!(config.auth.password_hash.is_none());
+}
+
+#[test]
+fn load_invalid_discovery_interval_returns_validation_error() {
+    let config_content = r#"
+        discovery_interval: 1
+        docker_socket_path: "/var/run/docker.sock"
+        logging_level: "info"
+        log_file_path: "/var/log/app.log"
+        metrics_log_file_path: "/var/log/metrics.log"
+        frontend_theme: "light"
+        auth:
+          username: "admin"
+    "#;
+
+    let (_dir, config_path) = create_test_config(config_content);
+    let result = Config::load(config_path);
+    assert!(matches!(result, Err(ConfigError::ValidationError(_))));
+}
+
+#[test]
+fn load_invalid_log_level_returns_validation_error() {
+    let config_content = r#"
+        discovery_interval: 30
+        docker_socket_path: "/var/run/docker.sock"
+        logging_level: "invalid"
+        log_file_path: "/var/log/app.log"
+        metrics_log_file_path: "/var/log/metrics.log"
+        frontend_theme: "light"
+        auth:
+          username: "admin"
+    "#;
+
+    let (_dir, config_path) = create_test_config(config_content);
+    let result = Config::load(config_path);
+    assert!(matches!(result, Err(ConfigError::ValidationError(_))));
+}
+
+#[test]
+fn load_invalid_theme_returns_validation_error() {
+    let config_content = r#"
+        discovery_interval: 30
+        docker_socket_path: "/var/run/docker.sock"
+        logging_level: "info"
+        log_file_path: "/var/log/app.log"
+        metrics_log_file_path: "/var/log/metrics.log"
+        frontend_theme: "blue"
+        auth:
+          username: "admin"
+    "#;
+
+    let (_dir, config_path) = create_test_config(config_content);
+    let result = Config::load(config_path);
+    assert!(matches!(result, Err(ConfigError::ValidationError(_))));
+}
+
+#[test]
+fn load_empty_username_returns_validation_error() {
+    let config_content = r#"
+        discovery_interval: 30
+        docker_socket_path: "/var/run/docker.sock"
+        logging_level: "info"
+        log_file_path: "/var/log/app.log"
+        metrics_log_file_path: "/var/log/metrics.log"
+        frontend_theme: "light"
+        auth:
+          username: ""
+    "#;
+
+    let (_dir, config_path) = create_test_config(config_content);
+    let result = Config::load(config_path);
+    assert!(matches!(result, Err(ConfigError::ValidationError(_))));
+}
+
+#[test]
+fn with_defaults_when_called_returns_default_config() {
+    let config = Config::with_defaults();
+    assert_eq!(config.discovery_interval, 30);
+    assert_eq!(config.docker_socket_path, "/var/run/docker.sock");
+    assert_eq!(config.logging_level, "info");
+    assert_eq!(config.frontend_theme, "light");
+    assert_eq!(config.auth.username, "admin");
+    assert!(config.auth.password_hash.is_none());
+    
+    // Validate that default config passes validation
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn load_nonexistent_file_returns_file_error() {
+    let result = Config::load("/nonexistent/config.yaml");
+    assert!(matches!(result, Err(ConfigError::FileError(_))));
+}
+
+#[test]
+fn load_invalid_yaml_returns_yaml_error() {
+    let config_content = "invalid: yaml: content: [";
+    let (_dir, config_path) = create_test_config(config_content);
+    let result = Config::load(config_path);
+    assert!(matches!(result, Err(ConfigError::YamlError(_))));
+}
