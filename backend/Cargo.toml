@@ -1,0 +1,12 @@
+[package]
+name = "docker-web"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+thiserror = "1.0"  # For error handling
+validator = { version = "0.16", features = ["derive"] }
+log = "0.4"        # Logging interface
+env_logger = "0.10"  # Logging implementation  # For field validation

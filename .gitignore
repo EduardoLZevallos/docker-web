@@ -1,0 +1,32 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# React
+/frontend/docker-web-ui/node_modules/
+/frontend/docker-web-ui/build/
+/frontend/docker-web-ui/.env.local
+/frontend/docker-web-ui/.env.development.local
+/frontend/docker-web-ui/.env.test.local
+/frontend/docker-web-ui/.env.production.local
+/frontend/docker-web-ui/npm-debug.log*
+/frontend/docker-web-ui/yarn-debug.log*
+/frontend/docker-web-ui/yarn-error.log*
+
+# IDE and Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Config files that might contain sensitive information
+/config/*.local.yaml
+/config/*.prod.yaml
+
+# Log files
+*.log
+
+# Test coverage
+/tests/coverage/
