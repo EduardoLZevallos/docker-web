@@ -46,8 +46,26 @@ impl DockerClient {
                     .unwrap_or_default()
                     .trim_start_matches('/')
                     .to_string(),
+                image: c.image.unwrap_or_default(),
                 status: c.status.unwrap_or_default(),
                 created: c.created.unwrap_or_default(),
+                ports: c.ports
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|p| {
+                        let private = p.private_port.to_string();
+                        if let Some(public) = p.public_port {
+                            format!("{}:{}", public, private)
+                        } else {
+                            private
+                        }
+                    })
+                    .collect(),
+                networks: c.network_settings
+                    .and_then(|ns| ns.networks)
+                    .unwrap_or_default()
+                    .into_keys()
+                    .collect(),
             })
             .collect();
 
@@ -60,6 +78,9 @@ impl DockerClient {
 pub struct ContainerInfo {
     pub id: String,
     pub name: String,
+    pub image: String,
     pub status: String,
     pub created: i64,
+    pub ports: Vec<String>,
+    pub networks: Vec<String>,
 }
