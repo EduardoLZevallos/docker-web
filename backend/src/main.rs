@@ -15,8 +15,8 @@ async fn main() -> std::io::Result<()> {
     // Load configuration
     let config_path = PathBuf::from("../config/config.yaml");
     let config = Config::load(config_path)
-        .unwrap_or_else(|_| {
-            log::warn!("Failed to load config file, using defaults");
+        .unwrap_or_else(|e| {
+            log::warn!("Failed to load config file: {}, using defaults", e);
             Config::with_defaults()
         });
 
