@@ -15,14 +15,14 @@ pub enum ConfigError {
     ValidationError(String),
 }
 
-#[derive(Debug, Serialize, Deserialize, Validate)]
+#[derive(Debug, Serialize, Deserialize, Validate, Clone)]
 pub struct Auth {
     #[validate(length(min = 1, message = "Username cannot be empty"))]
     pub username: String,
     pub password_hash: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Validate)]
+#[derive(Debug, Serialize, Deserialize, Validate, Clone)]
 pub struct Config {
     #[validate(range(min = 5, max = 3600, message = "Discovery interval must be between 5 and 3600 seconds"))]
     pub discovery_interval: u32,
