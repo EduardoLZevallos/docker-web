@@ -3,6 +3,7 @@ use thiserror::Error;
 use validator::{Validate, ValidationError};
 use std::path::PathBuf;
 use std::fs;
+use std::str::FromStr;
 use log::{debug, info, error};
 
 #[derive(Error, Debug)]
@@ -62,10 +63,12 @@ fn validate_bind_address(address: &str) -> Result<(), ValidationError> {
     if address.is_empty() {
         return Err(ValidationError::new("Bind address cannot be empty"));
     }
-    // Basic validation for IP:PORT format
-    if !address.contains(':') {
-        return Err(ValidationError::new("Bind address must include port (e.g., 127.0.0.1:8080)"));
+    
+    // Use std::net::SocketAddr for proper validation
+    if let Err(_) = std::net::SocketAddr::from_str(address) {
+        return Err(ValidationError::new("Invalid socket address format (expected IP:PORT)"));
     }
+    
     Ok(())
 }
 

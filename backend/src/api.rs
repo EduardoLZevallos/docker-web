@@ -1,9 +1,8 @@
-use actix_web::{web, HttpResponse, Result};
-use crate::config::Config;
+use actix_web::{web, HttpResponse, Result as ActixResult};
 use crate::docker::DockerClient;
 
 /// Health check endpoint
-pub async fn health() -> Result<HttpResponse> {
+pub async fn health() -> ActixResult<HttpResponse> {
     let health_resp = serde_json::json!({
         "status": "healthy",
         "service": "docker-web-api",
@@ -15,21 +14,8 @@ pub async fn health() -> Result<HttpResponse> {
 }
 
 /// Get all running containers
-pub async fn get_containers(config: web::Data<Config>) -> Result<HttpResponse> {
-    let client = match DockerClient::new(&config) {
-        Ok(client) => client,
-        Err(err) => {
-            log::error!("Failed to create Docker client: {}", err);
-            let error_resp = serde_json::json!({
-                "error": "Docker daemon connection failed",
-                "message": err.to_string(),
-                "timestamp": chrono::Utc::now().to_rfc3339()
-            });
-            return Ok(HttpResponse::ServiceUnavailable().json(error_resp));
-        }
-    };
-
-    match client.list_running_containers().await {
+pub async fn get_containers(docker_client: web::Data<DockerClient>) -> ActixResult<HttpResponse> {
+    match docker_client.list_running_containers().await {
         Ok(containers) => {
             log::info!("Successfully retrieved {} containers", containers.len());
             Ok(HttpResponse::Ok().json(containers))
@@ -49,24 +35,11 @@ pub async fn get_containers(config: web::Data<Config>) -> Result<HttpResponse> {
 /// Get a specific container by ID
 pub async fn get_container_by_id(
     path: web::Path<String>,
-    config: web::Data<Config>,
-) -> Result<HttpResponse> {
+    docker_client: web::Data<DockerClient>,
+) -> ActixResult<HttpResponse> {
     let container_id = path.into_inner();
     
-    let client = match DockerClient::new(&config) {
-        Ok(client) => client,
-        Err(err) => {
-            log::error!("Failed to create Docker client: {}", err);
-            let error_resp = serde_json::json!({
-                "error": "Docker daemon connection failed",
-                "message": err.to_string(),
-                "timestamp": chrono::Utc::now().to_rfc3339()
-            });
-            return Ok(HttpResponse::ServiceUnavailable().json(error_resp));
-        }
-    };
-
-    match client.get_container_by_id(&container_id).await {
+    match docker_client.get_container_by_id(&container_id).await {
         Ok(Some(container)) => {
             log::info!("Successfully retrieved container: {}", container_id);
             Ok(HttpResponse::Ok().json(container))
@@ -93,21 +66,8 @@ pub async fn get_container_by_id(
 }
 
 /// Get all Docker networks
-pub async fn get_networks(config: web::Data<Config>) -> Result<HttpResponse> {
-    let client = match DockerClient::new(&config) {
-        Ok(client) => client,
-        Err(err) => {
-            log::error!("Failed to create Docker client: {}", err);
-            let error_resp = serde_json::json!({
-                "error": "Docker daemon connection failed",
-                "message": err.to_string(),
-                "timestamp": chrono::Utc::now().to_rfc3339()
-            });
-            return Ok(HttpResponse::ServiceUnavailable().json(error_resp));
-        }
-    };
-
-    match client.list_networks().await {
+pub async fn get_networks(docker_client: web::Data<DockerClient>) -> ActixResult<HttpResponse> {
+    match docker_client.list_networks().await {
         Ok(networks) => {
             log::info!("Successfully retrieved {} networks", networks.len());
             Ok(HttpResponse::Ok().json(networks))
@@ -127,24 +87,11 @@ pub async fn get_networks(config: web::Data<Config>) -> Result<HttpResponse> {
 /// Get a specific network by ID or name
 pub async fn get_network_by_id(
     path: web::Path<String>,
-    config: web::Data<Config>,
-) -> Result<HttpResponse> {
+    docker_client: web::Data<DockerClient>,
+) -> ActixResult<HttpResponse> {
     let network_id = path.into_inner();
     
-    let client = match DockerClient::new(&config) {
-        Ok(client) => client,
-        Err(err) => {
-            log::error!("Failed to create Docker client: {}", err);
-            let error_resp = serde_json::json!({
-                "error": "Docker daemon connection failed",
-                "message": err.to_string(),
-                "timestamp": chrono::Utc::now().to_rfc3339()
-            });
-            return Ok(HttpResponse::ServiceUnavailable().json(error_resp));
-        }
-    };
-
-    match client.get_network_by_id(&network_id).await {
+    match docker_client.get_network_by_id(&network_id).await {
         Ok(Some(network)) => {
             log::info!("Successfully retrieved network: {}", network_id);
             Ok(HttpResponse::Ok().json(network))
@@ -171,24 +118,11 @@ pub async fn get_network_by_id(
 }
 
 /// Get combined container and network data for visualization
-pub async fn get_network_topology(config: web::Data<Config>) -> Result<HttpResponse> {
-    let client = match DockerClient::new(&config) {
-        Ok(client) => client,
-        Err(err) => {
-            log::error!("Failed to create Docker client: {}", err);
-            let error_resp = serde_json::json!({
-                "error": "Docker daemon connection failed",
-                "message": err.to_string(),
-                "timestamp": chrono::Utc::now().to_rfc3339()
-            });
-            return Ok(HttpResponse::ServiceUnavailable().json(error_resp));
-        }
-    };
-
+pub async fn get_network_topology(docker_client: web::Data<DockerClient>) -> ActixResult<HttpResponse> {
     // Fetch both containers and networks concurrently
     let (containers_result, networks_result) = tokio::join!(
-        client.list_running_containers(),
-        client.list_networks()
+        docker_client.list_running_containers(),
+        docker_client.list_networks()
     );
 
     match (containers_result, networks_result) {

@@ -1,20 +1,26 @@
 use actix_web::{test, App, web};
-use docker_web::{api, config::Config};
+use docker_web::{api, docker::DockerClient};
 use serde_json::Value;
 use std::time::Duration;
 use testcontainers::{core::WaitFor, runners::AsyncRunner, GenericImage};
 use tokio::time::sleep;
 
+/// Helper function to create DockerClient for testing
+fn create_test_docker_client() -> DockerClient {
+    DockerClient::new_with_defaults()
+        .expect("Failed to create DockerClient for testing - is Docker running?")
+}
+
 /// Integration tests for API endpoints using testcontainers
 /// Following BDD pattern: Given-When-Then
 
 #[tokio::test]
-async fn health_endpoint_returns_healthy_status() {
+async fn get_health_returns_healthy_status() {
     // GIVEN a running API server
-    let config = Config::with_defaults();
+    let docker_client = create_test_docker_client();
     let app = test::init_service(
         App::new()
-            .app_data(web::Data::new(config))
+            .app_data(web::Data::new(docker_client))
             .service(
                 web::scope("/api")
                     .route("/health", web::get().to(api::health))
@@ -40,7 +46,7 @@ async fn health_endpoint_returns_healthy_status() {
 }
 
 #[tokio::test]
-async fn containers_endpoint_with_test_container() {
+async fn get_containers_with_test_container_returns_container_list() {
     // GIVEN a test container is running
     let nginx_image = GenericImage::new("nginx", "latest")
         .with_wait_for(WaitFor::seconds(3));
@@ -51,10 +57,10 @@ async fn containers_endpoint_with_test_container() {
     sleep(Duration::from_secs(3)).await;
     
     // AND a running API server
-    let config = Config::with_defaults();
+    let docker_client = create_test_docker_client();
     let app = test::init_service(
         App::new()
-            .app_data(web::Data::new(config))
+            .app_data(web::Data::new(docker_client))
             .service(
                 web::scope("/api")
                     .route("/containers", web::get().to(api::get_containers))
@@ -76,14 +82,14 @@ async fn containers_endpoint_with_test_container() {
     let json: Value = serde_json::from_slice(&body).expect("Failed to parse JSON response");
     assert!(json.is_array());
     let containers = json.as_array().unwrap();
-    assert!(containers.len() > 0, "Expected at least one container");
+    assert!(!containers.is_empty(), "Expected at least one container");
     
     // Debug: Log the first container to see the actual structure
         log::debug!("First container: {}", containers[0]);
 }
 
 #[tokio::test]
-async fn container_by_id_endpoint_returns_specific_container() {
+async fn get_container_by_id_with_running_container_returns_specific_container() {
     use testcontainers::{GenericImage, runners::AsyncRunner};
     
     // GIVEN a test container is running
@@ -94,10 +100,10 @@ async fn container_by_id_endpoint_returns_specific_container() {
     sleep(Duration::from_secs(3)).await;
     
     // AND we know the container ID
-    let config = Config::with_defaults();
+    let docker_client = create_test_docker_client();
     let app = test::init_service(
         App::new()
-            .app_data(web::Data::new(config.clone()))
+            .app_data(web::Data::new(docker_client.clone()))
             .service(
                 web::scope("/api")
                     .configure(api::configure_routes)
@@ -141,12 +147,12 @@ async fn container_by_id_endpoint_returns_specific_container() {
 }
 
 #[tokio::test]
-async fn container_by_id_endpoint_returns_404_for_nonexistent() {
+async fn get_container_by_id_with_non_existent_id_returns_404_error() {
     // GIVEN the API server is running
-    let config = Config::with_defaults();
+    let docker_client = create_test_docker_client();
     let app = test::init_service(
         App::new()
-            .app_data(web::Data::new(config))
+            .app_data(web::Data::new(docker_client))
             .service(
                 web::scope("/api")
                     .configure(api::configure_routes)
@@ -171,12 +177,12 @@ async fn container_by_id_endpoint_returns_404_for_nonexistent() {
 }
 
 #[tokio::test]
-async fn network_by_id_endpoint_returns_specific_network() {
+async fn get_network_by_id_with_existing_network_returns_specific_network() {
     // GIVEN the API server is running
-    let config = Config::with_defaults();
+    let docker_client = create_test_docker_client();
     let app = test::init_service(
         App::new()
-            .app_data(web::Data::new(config))
+            .app_data(web::Data::new(docker_client))
             .service(
                 web::scope("/api")
                     .configure(api::configure_routes)
@@ -218,12 +224,12 @@ async fn network_by_id_endpoint_returns_specific_network() {
 }
 
 #[tokio::test]
-async fn network_by_id_endpoint_returns_404_for_nonexistent() {
+async fn get_network_by_id_with_non_existent_id_returns_404_error() {
     // GIVEN the API server is running
-    let config = Config::with_defaults();
+    let docker_client = create_test_docker_client();
     let app = test::init_service(
         App::new()
-            .app_data(web::Data::new(config))
+            .app_data(web::Data::new(docker_client))
             .service(
                 web::scope("/api")
                     .configure(api::configure_routes)
@@ -248,14 +254,15 @@ async fn network_by_id_endpoint_returns_404_for_nonexistent() {
 }
 
 #[tokio::test]
-async fn networks_endpoint_with_custom_network() {
+async fn get_networks_with_custom_network_returns_network_list() {
     use bollard::Docker;
     use bollard::network::CreateNetworkOptions;
     
     // GIVEN we create a custom Docker network
     let docker = Docker::connect_with_socket_defaults().unwrap();
     
-    let network_name = "test_network_api_endpoint";
+    // Generate unique network name to avoid test conflicts
+    let network_name = format!("test_network_api_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
     let create_options = CreateNetworkOptions {
         name: network_name.to_string(),
         driver: "bridge".to_string(),
@@ -269,10 +276,10 @@ async fn networks_endpoint_with_custom_network() {
     sleep(Duration::from_secs(1)).await;
     
     // AND the API server is running
-    let config = Config::with_defaults();
+    let docker_client = create_test_docker_client();
     let app = test::init_service(
         App::new()
-            .app_data(web::Data::new(config))
+            .app_data(web::Data::new(docker_client))
             .service(
                 web::scope("/api")
                     .configure(api::configure_routes)
@@ -330,11 +337,13 @@ async fn networks_endpoint_with_custom_network() {
     assert_eq!(specific_network_by_name["driver"], "bridge");
     
     // Cleanup: remove the custom network
-    let _ = docker.remove_network(network_name).await;
+    if let Err(e) = docker.remove_network(&network_name).await {
+        log::warn!("Failed to cleanup test network: {}", e);
+    }
 }
 
 #[tokio::test]
-async fn topology_endpoint_with_custom_network_and_container() {
+async fn get_topology_with_custom_network_and_container_returns_combined_data() {
     use testcontainers::{GenericImage, runners::AsyncRunner, core::WaitFor};
     use bollard::Docker;
     use bollard::network::CreateNetworkOptions;
@@ -366,10 +375,10 @@ async fn topology_endpoint_with_custom_network_and_container() {
     sleep(Duration::from_secs(4)).await;
     
     // AND the API server is running
-    let config = Config::with_defaults();
+    let docker_client = create_test_docker_client();
     let app = test::init_service(
         App::new()
-            .app_data(web::Data::new(config))
+            .app_data(web::Data::new(docker_client))
             .service(
                 web::scope("/api")
                     .configure(api::configure_routes)
@@ -423,5 +432,7 @@ async fn topology_endpoint_with_custom_network_and_container() {
     log::debug!("Custom network: {} found in topology", network_name);
     
     // Cleanup: remove the custom network (container will be cleaned up by testcontainers)
-    let _ = docker.remove_network(&network_name).await;
+    if let Err(e) = docker.remove_network(&network_name).await {
+        log::warn!("Failed to cleanup test network: {}", e);
+    }
 }

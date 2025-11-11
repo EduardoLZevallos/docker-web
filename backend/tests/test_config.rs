@@ -15,7 +15,7 @@ fn create_test_config(content: &str) -> (tempfile::TempDir, PathBuf) {
 }
 
 #[test_log::test]
-fn load_valid_config_file_returns_config_object() {
+fn load_with_valid_config_file_returns_config_object() {
     let config_content = r#"
         discovery_interval: 30
         docker_socket_path: "/var/run/docker.sock"
@@ -40,7 +40,7 @@ fn load_valid_config_file_returns_config_object() {
 }
 
 #[test_log::test]
-fn load_invalid_discovery_interval_returns_validation_error() {
+fn load_with_invalid_discovery_interval_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 1
         docker_socket_path: "/var/run/docker.sock"
@@ -59,7 +59,7 @@ fn load_invalid_discovery_interval_returns_validation_error() {
 }
 
 #[test_log::test]
-fn load_invalid_log_level_returns_validation_error() {
+fn load_with_invalid_log_level_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 30
         docker_socket_path: "/var/run/docker.sock"
@@ -78,7 +78,7 @@ fn load_invalid_log_level_returns_validation_error() {
 }
 
 #[test_log::test]
-fn load_invalid_theme_returns_validation_error() {
+fn load_with_invalid_theme_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 30
         docker_socket_path: "/var/run/docker.sock"
@@ -97,7 +97,7 @@ fn load_invalid_theme_returns_validation_error() {
 }
 
 #[test_log::test]
-fn load_empty_username_returns_validation_error() {
+fn load_with_empty_username_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 30
         docker_socket_path: "/var/run/docker.sock"
@@ -130,7 +130,7 @@ fn with_defaults_when_called_returns_default_config() {
 }
 
 #[test_log::test]
-fn load_invalid_bind_address_returns_validation_error() {
+fn load_with_invalid_bind_address_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 30
         docker_socket_path: "/var/run/docker.sock"
@@ -149,13 +149,13 @@ fn load_invalid_bind_address_returns_validation_error() {
 }
 
 #[test_log::test]
-fn load_nonexistent_file_returns_file_error() {
+fn load_with_non_existent_file_returns_file_error() {
     let result = Config::load("/nonexistent/config.yaml");
     assert!(matches!(result, Err(ConfigError::FileError(_))));
 }
 
 #[test_log::test]
-fn load_invalid_yaml_returns_yaml_error() {
+fn load_with_invalid_yaml_returns_yaml_error() {
     let config_content = "invalid: yaml: content: [";
     let (_dir, config_path) = create_test_config(config_content);
     let result = Config::load(config_path);

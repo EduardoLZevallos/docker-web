@@ -15,6 +15,7 @@ pub enum DockerError {
 }
 
 /// Client for interacting with the Docker daemon
+#[derive(Clone)]
 pub struct DockerClient {
     client: Docker,
 }
@@ -23,6 +24,18 @@ impl DockerClient {
     /// Create a new Docker client using the configuration
     pub fn new(config: &Config) -> Result<Self, DockerError> {
         let client = Docker::connect_with_socket(&config.docker_socket_path, 120, bollard::API_DEFAULT_VERSION)?;
+        Ok(DockerClient { client })
+    }
+
+    /// Create a new Docker client with default configuration 
+    pub fn new_with_defaults() -> Result<Self, DockerError> {
+        let client = Docker::connect_with_socket("/var/run/docker.sock", 120, bollard::API_DEFAULT_VERSION)?;
+        Ok(DockerClient { client })
+    }
+
+    /// Create a new Docker client with a custom socket path (for testing)
+    pub fn new_with_socket(socket_path: &str) -> Result<Self, DockerError> {
+        let client = Docker::connect_with_socket(socket_path, 120, bollard::API_DEFAULT_VERSION)?;
         Ok(DockerClient { client })
     }
 
@@ -54,11 +67,14 @@ impl DockerClient {
                     .unwrap_or_default()
                     .into_iter()
                     .map(|p| {
+                        let protocol = p.typ
+                            .map(|t| format!("{:?}", t).to_lowercase())
+                            .unwrap_or_else(|| "tcp".to_string());
                         let private = p.private_port.to_string();
                         if let Some(public) = p.public_port {
-                            format!("{}:{}", public, private)
+                            format!("{}:{}/{}", public, private, protocol)
                         } else {
-                            private
+                            format!("{}/{}", private, protocol)
                         }
                     })
                     .collect(),
@@ -104,13 +120,17 @@ impl DockerClient {
                 status: c.status.unwrap_or_default(),
                 created: c.created.unwrap_or_default(),
                 ports: c.ports.unwrap_or_default().into_iter().map(|p| {
+                    let protocol = p.typ
+                        .map(|t| format!("{:?}", t).to_lowercase())
+                        .unwrap_or_else(|| "tcp".to_string());
                     if let Some(public_port) = p.public_port {
-                        format!("{}:{}/{}", 
+                        format!("{}:{}:{}/{}", 
                                p.ip.unwrap_or_else(|| "0.0.0.0".to_string()),
-                               public_port, 
-                               p.private_port)
+                               public_port,
+                               p.private_port,
+                               protocol)
                     } else {
-                        format!("{}/tcp", p.private_port)
+                        format!("{}/{}", p.private_port, protocol)
                     }
                 }).collect(),
                 networks: c.network_settings

@@ -1,5 +1,5 @@
 # Testing
-- using the naming convention for unit tests :  MethodName_StateUnderTest_ExpectedBehavior
+- using the naming convention for tests :  methodName_stateUnderTest_expectedBehavior.  make sure its snake case.
 - Should always use GIVEN WHEN THEN structure for clarity
 - look to create integration tests to cover end to end functionality when possible.
 - look to test functionality, do not mock a bunch of stuff and just test that your mock works.
