@@ -19,6 +19,7 @@ fn load_with_valid_config_file_returns_config_object() {
     let config_content = r#"
         discovery_interval: 30
         docker_socket_path: "/var/run/docker.sock"
+        docker_timeout_seconds: 120
         bind_address: "127.0.0.1:8080"
         logging_level: "info"
         log_file_path: "/var/log/app.log"
@@ -44,6 +45,7 @@ fn load_with_invalid_discovery_interval_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 1
         docker_socket_path: "/var/run/docker.sock"
+        docker_timeout_seconds: 120
         bind_address: "127.0.0.1:8080"
         logging_level: "info"
         log_file_path: "/var/log/app.log"
@@ -63,6 +65,7 @@ fn load_with_invalid_log_level_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 30
         docker_socket_path: "/var/run/docker.sock"
+        docker_timeout_seconds: 120
         bind_address: "127.0.0.1:8080"
         logging_level: "invalid"
         log_file_path: "/var/log/app.log"
@@ -82,6 +85,7 @@ fn load_with_invalid_theme_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 30
         docker_socket_path: "/var/run/docker.sock"
+        docker_timeout_seconds: 120
         bind_address: "127.0.0.1:8080"
         logging_level: "info"
         log_file_path: "/var/log/app.log"
@@ -101,6 +105,7 @@ fn load_with_empty_username_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 30
         docker_socket_path: "/var/run/docker.sock"
+        docker_timeout_seconds: 120
         bind_address: "127.0.0.1:8080"
         logging_level: "info"
         log_file_path: "/var/log/app.log"
@@ -134,6 +139,7 @@ fn load_with_invalid_bind_address_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 30
         docker_socket_path: "/var/run/docker.sock"
+        docker_timeout_seconds: 120
         bind_address: "invalid_address"
         logging_level: "info"
         log_file_path: "/var/log/app.log"

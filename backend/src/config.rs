@@ -31,6 +31,9 @@ pub struct Config {
     #[validate(custom = "validate_socket_path")]
     pub docker_socket_path: String,
 
+    #[validate(range(min = 1, max = 300, message = "Docker timeout must be between 1 and 300 seconds"))]
+    pub docker_timeout_seconds: u64,
+
     #[validate(custom = "validate_bind_address")]
     pub bind_address: String,
 
@@ -65,7 +68,7 @@ fn validate_bind_address(address: &str) -> Result<(), ValidationError> {
     }
     
     // Use std::net::SocketAddr for proper validation
-    if let Err(_) = std::net::SocketAddr::from_str(address) {
+    if std::net::SocketAddr::from_str(address).is_err() {
         return Err(ValidationError::new("Invalid socket address format (expected IP:PORT)"));
     }
     
@@ -144,7 +147,12 @@ impl Config {
     pub fn with_defaults() -> Self {
         Self {
             discovery_interval: 30,
-            docker_socket_path: String::from("/var/run/docker.sock"),
+            docker_socket_path: std::env::var("DOCKER_SOCKET_PATH")
+                .unwrap_or_else(|_| "/var/run/docker.sock".to_string()),
+            docker_timeout_seconds: std::env::var("DOCKER_TIMEOUT")
+                .ok()
+                .and_then(|t| t.parse().ok())
+                .unwrap_or(120),
             bind_address: std::env::var("BIND_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8080".to_string()),
             reverse_proxy_url: None,
             logging_level: String::from("info"),
