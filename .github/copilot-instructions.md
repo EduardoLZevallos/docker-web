@@ -4,6 +4,7 @@
 - look to create integration tests to cover end to end functionality when possible.
 - look to test functionality, do not mock a bunch of stuff and just test that your mock works.
 - always look for redundancy in tests and remove redundant tests.
+- look to bring up actual containers and networks with testcontainers to test against real docker api responses.
 
 # Rust
 - when adding crates always use cargo add <crate_name>

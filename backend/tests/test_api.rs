@@ -40,7 +40,7 @@ async fn health_endpoint_returns_healthy_status() {
 }
 
 #[tokio::test]
-async fn containers_endpoint_returns_container_list() {
+async fn containers_endpoint_returns_valid_structure() {
     // GIVEN a running API server
     let config = Config::with_defaults();
     let app = test::init_service(
@@ -59,13 +59,22 @@ async fn containers_endpoint_returns_container_list() {
     
     let resp = test::call_service(&app, req).await;
     
-    // THEN it should return 200 OK
+    // THEN it should return 200 OK with valid JSON structure
     assert!(resp.status().is_success());
     
-    // AND return a JSON array (might be empty or contain existing containers)
     let body = test::read_body(resp).await;
     let json: Value = serde_json::from_slice(&body).expect("Failed to parse JSON response");
     assert!(json.is_array(), "Response should be a JSON array");
+    
+    // If containers exist, validate their structure
+    if let Some(containers) = json.as_array() {
+        if let Some(first_container) = containers.first() {
+            assert!(first_container["id"].is_string(), "Container should have an id");
+            assert!(first_container["name"].is_string(), "Container should have a name");
+            assert!(first_container["image"].is_string(), "Container should have an image");
+            assert!(first_container["status"].is_string(), "Container should have a status");
+        }
+    }
 }
 
 #[tokio::test]
@@ -151,6 +160,7 @@ async fn networks_endpoint_returns_network_list() {
         assert!(first_network["name"].is_string(), "Network should have a name");
         assert!(first_network["driver"].is_string(), "Network should have a driver");
         assert!(first_network["scope"].is_string(), "Network should have a scope");
+        assert!(first_network["containers"].is_array(), "Network should have a containers array");
     }
 }
 
@@ -358,4 +368,183 @@ async fn network_by_id_endpoint_returns_404_for_nonexistent() {
 
     assert_eq!(error["error"], "Network not found");
     assert!(error["message"].as_str().unwrap().contains("nonexistent-network-id-12345"));
+}
+
+#[tokio::test]
+async fn networks_endpoint_with_custom_network() {
+    use bollard::Docker;
+    use bollard::network::CreateNetworkOptions;
+    
+    // GIVEN we create a custom Docker network
+    let docker = Docker::connect_with_socket_defaults().unwrap();
+    
+    let network_name = "test_network_api_endpoint";
+    let create_options = CreateNetworkOptions {
+        name: network_name.to_string(),
+        driver: "bridge".to_string(),
+        ..Default::default()
+    };
+    
+    let network_response = docker.create_network(create_options).await.unwrap();
+    let custom_network_id = network_response.id.as_ref().unwrap();
+    
+    // Give the network a moment to be created
+    sleep(Duration::from_secs(1)).await;
+    
+    // AND the API server is running
+    let config = Config::with_defaults();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(config))
+            .service(
+                web::scope("/api")
+                    .configure(api::configure_routes)
+            )
+    ).await;
+
+    // WHEN we request the networks list
+    let req = test::TestRequest::get()
+        .uri("/api/networks")
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+    assert!(resp.status().is_success());
+
+    let body = test::read_body(resp).await;
+    let networks: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let networks_array = networks.as_array().unwrap();
+    
+    // THEN we should find our custom network in the list
+    let custom_network = networks_array.iter()
+        .find(|n| n["name"].as_str().unwrap() == network_name)
+        .expect("Should find custom network");
+    
+    assert_eq!(custom_network["name"], network_name);
+    assert_eq!(custom_network["driver"], "bridge");
+    assert_eq!(custom_network["scope"], "local");
+    
+    // AND we should be able to get the specific network by ID
+    let network_by_id_req = test::TestRequest::get()
+        .uri(&format!("/api/networks/{}", custom_network_id))
+        .to_request();
+
+    let network_by_id_resp = test::call_service(&app, network_by_id_req).await;
+    assert!(network_by_id_resp.status().is_success());
+
+    let network_by_id_body = test::read_body(network_by_id_resp).await;
+    let specific_network: serde_json::Value = serde_json::from_slice(&network_by_id_body).unwrap();
+    
+    assert_eq!(specific_network["id"].as_str().unwrap(), custom_network_id);
+    assert_eq!(specific_network["name"], network_name);
+    assert_eq!(specific_network["driver"], "bridge");
+    
+    // AND we should be able to get it by name as well
+    let network_by_name_req = test::TestRequest::get()
+        .uri(&format!("/api/networks/{}", network_name))
+        .to_request();
+
+    let network_by_name_resp = test::call_service(&app, network_by_name_req).await;
+    assert!(network_by_name_resp.status().is_success());
+
+    let network_by_name_body = test::read_body(network_by_name_resp).await;
+    let specific_network_by_name: serde_json::Value = serde_json::from_slice(&network_by_name_body).unwrap();
+    
+    assert_eq!(specific_network_by_name["name"], network_name);
+    assert_eq!(specific_network_by_name["driver"], "bridge");
+    
+    // Cleanup: remove the custom network
+    let _ = docker.remove_network(network_name).await;
+}
+
+#[tokio::test]
+async fn topology_endpoint_with_custom_network_and_container() {
+    use testcontainers::{GenericImage, runners::AsyncRunner, core::WaitFor};
+    use bollard::Docker;
+    use bollard::network::CreateNetworkOptions;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    
+    // GIVEN we create a custom Docker network with unique name
+    let docker = Docker::connect_with_socket_defaults().unwrap();
+    
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let network_name = format!("test_topology_network_{}", timestamp);
+    
+    let create_network_options = CreateNetworkOptions {
+        name: network_name.to_string(),
+        driver: "bridge".to_string(),
+        ..Default::default()
+    };
+    
+    let _network_response = docker.create_network(create_network_options).await.unwrap();
+    sleep(Duration::from_secs(1)).await;
+    
+    // AND we start a testcontainer
+    let nginx_image = GenericImage::new("nginx", "latest")
+        .with_wait_for(WaitFor::seconds(3));
+    
+    let _container = nginx_image.start().await;
+    sleep(Duration::from_secs(4)).await;
+    
+    // AND the API server is running
+    let config = Config::with_defaults();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(config))
+            .service(
+                web::scope("/api")
+                    .configure(api::configure_routes)
+            )
+    ).await;
+
+    // WHEN we request the topology data
+    let req = test::TestRequest::get()
+        .uri("/api/topology")
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+    assert!(resp.status().is_success());
+
+    let body = test::read_body(resp).await;
+    let topology: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    
+    // THEN the topology should contain both containers and networks
+    assert!(topology.get("containers").is_some());
+    assert!(topology.get("networks").is_some());
+    assert!(topology.get("timestamp").is_some());
+    
+    let networks = topology["networks"].as_array().unwrap();
+    let containers = topology["containers"].as_array().unwrap();
+    
+    // AND we should find our custom network
+    let custom_network = networks.iter()
+        .find(|n| n["name"].as_str().unwrap() == network_name)
+        .expect("Should find custom network in topology");
+    
+    assert_eq!(custom_network["name"], network_name);
+    assert_eq!(custom_network["driver"], "bridge");
+    
+    // AND we should find our container
+    let nginx_container = containers.iter()
+        .find(|c| c["image"].as_str().unwrap_or("").contains("nginx"))
+        .expect("Should find nginx container");
+    
+    assert!(nginx_container["name"].is_string());
+    let container_status = nginx_container["status"].as_str().unwrap();
+    log::debug!("Container status: {}", container_status);
+    assert!(container_status.to_lowercase().contains("up") || 
+            container_status.to_lowercase().contains("running"),
+            "Container should be running, got: {}", container_status);
+    
+    // AND we should have multiple networks (including our custom one and default docker networks)
+    assert!(networks.len() >= 4, "Should have at least 4 networks (bridge, host, none, and our custom network)");
+    
+    log::debug!("Topology test - Found {} networks and {} containers", 
+              networks.len(), containers.len());
+    log::debug!("Custom network: {} found in topology", network_name);
+    
+    // Cleanup: remove the custom network (container will be cleaned up by testcontainers)
+    let _ = docker.remove_network(&network_name).await;
 }
