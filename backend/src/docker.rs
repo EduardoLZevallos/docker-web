@@ -1,5 +1,6 @@
 use bollard::container::ListContainersOptions;
 use bollard::network::ListNetworksOptions;
+use bollard::models::PortTypeEnum;
 use bollard::Docker;
 use thiserror::Error;
 
@@ -15,14 +16,52 @@ pub enum DockerError {
 }
 
 /// Client for interacting with the Docker daemon
+#[derive(Clone)]
 pub struct DockerClient {
     client: Docker,
 }
 
 impl DockerClient {
+    /// Helper function to convert Docker port protocol enum to string
+    fn port_protocol_to_string(protocol_type: Option<PortTypeEnum>) -> String {
+        match protocol_type {
+            Some(PortTypeEnum::TCP) => "tcp".to_string(),
+            Some(PortTypeEnum::UDP) => "udp".to_string(),
+            Some(PortTypeEnum::SCTP) => "sctp".to_string(),
+            Some(PortTypeEnum::EMPTY) => "tcp".to_string(), // Default to tcp for empty
+            None => "tcp".to_string(),
+        }
+    }
+
     /// Create a new Docker client using the configuration
     pub fn new(config: &Config) -> Result<Self, DockerError> {
-        let client = Docker::connect_with_socket(&config.docker_socket_path, 120, bollard::API_DEFAULT_VERSION)?;
+        let client = Docker::connect_with_socket(
+            &config.docker_socket_path, 
+            config.docker_timeout_seconds, 
+            bollard::API_DEFAULT_VERSION
+        )?;
+        Ok(DockerClient { client })
+    }
+
+    /// Create a new Docker client with default configuration 
+    pub fn new_with_defaults() -> Result<Self, DockerError> {
+        let socket_path = std::env::var("DOCKER_SOCKET_PATH")
+            .unwrap_or_else(|_| "/var/run/docker.sock".to_string());
+        let timeout = std::env::var("DOCKER_TIMEOUT")
+            .ok()
+            .and_then(|t| t.parse().ok())
+            .unwrap_or(120);
+        let client = Docker::connect_with_socket(&socket_path, timeout, bollard::API_DEFAULT_VERSION)?;
+        Ok(DockerClient { client })
+    }
+
+    /// Create a new Docker client with a custom socket path (for testing)
+    pub fn new_with_socket(socket_path: &str) -> Result<Self, DockerError> {
+        let timeout = std::env::var("DOCKER_TIMEOUT")
+            .ok()
+            .and_then(|t| t.parse().ok())
+            .unwrap_or(120);
+        let client = Docker::connect_with_socket(socket_path, timeout, bollard::API_DEFAULT_VERSION)?;
         Ok(DockerClient { client })
     }
 
@@ -54,11 +93,12 @@ impl DockerClient {
                     .unwrap_or_default()
                     .into_iter()
                     .map(|p| {
+                        let protocol = Self::port_protocol_to_string(p.typ);
                         let private = p.private_port.to_string();
                         if let Some(public) = p.public_port {
-                            format!("{}:{}", public, private)
+                            format!("{}:{}/{}", public, private, protocol)
                         } else {
-                            private
+                            format!("{}/{}", private, protocol)
                         }
                     })
                     .collect(),
@@ -104,13 +144,15 @@ impl DockerClient {
                 status: c.status.unwrap_or_default(),
                 created: c.created.unwrap_or_default(),
                 ports: c.ports.unwrap_or_default().into_iter().map(|p| {
+                    let protocol = Self::port_protocol_to_string(p.typ);
                     if let Some(public_port) = p.public_port {
-                        format!("{}:{}/{}", 
+                        format!("{}:{}:{}/{}", 
                                p.ip.unwrap_or_else(|| "0.0.0.0".to_string()),
-                               public_port, 
-                               p.private_port)
+                               public_port,
+                               p.private_port,
+                               protocol)
                     } else {
-                        format!("{}/tcp", p.private_port)
+                        format!("{}/{}", p.private_port, protocol)
                     }
                 }).collect(),
                 networks: c.network_settings

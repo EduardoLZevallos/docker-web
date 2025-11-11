@@ -1,14 +1,17 @@
-use docker_web::config::Config;
 use docker_web::docker::{DockerClient, DockerError};
+
+/// Helper function to create DockerClient for testing
+fn create_test_docker_client() -> Result<DockerClient, DockerError> {
+    DockerClient::new_with_defaults()
+}
 
 #[test_log::test(tokio::test)]
 async fn new_client_with_invalid_socket_fails() {
-    // GIVEN a configuration with an invalid Docker socket path
-    let mut config = Config::with_defaults();
-    config.docker_socket_path = String::from("/nonexistent/docker.sock");
+    // GIVEN an invalid Docker socket path
+    let invalid_socket = "/nonexistent/docker.sock";
     
     // WHEN attempting to create a new Docker client and use it
-    let client_result = DockerClient::new(&config);
+    let client_result = DockerClient::new_with_socket(invalid_socket);
     
     // Client creation might succeed but usage should fail
     if let Ok(client) = client_result {
@@ -32,24 +35,18 @@ async fn new_client_with_invalid_socket_fails() {
 }
 
 #[test_log::test(tokio::test)]
-async fn list_running_containers_with_testcontainer() -> Result<(), DockerError> {
+async fn list_running_containers_with_testcontainer_returns_containers_list() -> Result<(), DockerError> {
     use testcontainers::{GenericImage, runners::AsyncRunner};
     
     // GIVEN a running test container with explicit cleanup
     let nginx_image = GenericImage::new("nginx", "alpine");
     let container = nginx_image.start().await;
     
-    // Ensure cleanup even on panic
-    let _cleanup_guard = scopeguard::guard((), |_| {
-        log::debug!("Test cleanup: container will be automatically dropped");
-    });
-    
     // Give the container a moment to fully start
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     
     // AND a Docker client
-    let config = Config::with_defaults();
-    let client = DockerClient::new(&config)?;
+    let client = create_test_docker_client()?;
     
     // WHEN listing running containers
     let containers = client.list_running_containers().await?;
@@ -62,12 +59,11 @@ async fn list_running_containers_with_testcontainer() -> Result<(), DockerError>
         .find(|c| c.status.contains("Up"));
     assert!(running_container.is_some(), "Expected to find a running container");
     
-    drop(container); // Explicit cleanup
     Ok(())
 }
 
 #[test_log::test(tokio::test)]
-async fn list_running_containers_with_multiple_testcontainers() -> Result<(), DockerError> {
+async fn list_running_containers_with_multiple_testcontainers_returns_multiple_containers() -> Result<(), DockerError> {
     use testcontainers::{GenericImage, runners::AsyncRunner};
     
     // GIVEN multiple running test containers with explicit cleanup
@@ -77,17 +73,11 @@ async fn list_running_containers_with_multiple_testcontainers() -> Result<(), Do
     let nginx_container = nginx_image.start().await;
     let alpine_container = alpine_image.start().await;
     
-    // Ensure cleanup even on panic
-    let _cleanup_guard = scopeguard::guard((), |_| {
-        log::debug!("Test cleanup: containers will be automatically dropped");
-    });
-    
     // Give containers time to start
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     
     // AND a Docker client
-    let config = Config::with_defaults();
-    let client = DockerClient::new(&config)?;
+    let client = create_test_docker_client()?;
     
     // WHEN listing running containers
     let containers = client.list_running_containers().await?;
@@ -103,31 +93,22 @@ async fn list_running_containers_with_multiple_testcontainers() -> Result<(), Do
         assert!(container.created > 0, "Container created timestamp should be positive");
     }
     
-    // Explicit cleanup
-    drop(nginx_container);
-    drop(alpine_container);
     Ok(())
 }
 
 #[test_log::test(tokio::test)]
-async fn list_networks_with_custom_network() -> Result<(), DockerError> {
+async fn list_networks_with_custom_network_returns_network_with_containers() -> Result<(), DockerError> {
     use testcontainers::{GenericImage, runners::AsyncRunner};
     
     // GIVEN a test container in a custom network
     let nginx_image = GenericImage::new("nginx", "alpine");
     let container = nginx_image.start().await;
     
-    // Ensure cleanup even on panic
-    let _cleanup_guard = scopeguard::guard((), |_| {
-        log::debug!("Test cleanup: container will be automatically dropped");
-    });
-    
     // Give the container time to start and register with networks
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     
     // AND a Docker client
-    let config = Config::with_defaults();
-    let client = DockerClient::new(&config)?;
+    let client = create_test_docker_client()?;
     
     // WHEN we list networks
     let networks = client.list_networks().await?;
@@ -142,7 +123,5 @@ async fn list_networks_with_custom_network() -> Result<(), DockerError> {
     
     log::debug!("Found {} networks with containers attached", networks_with_containers.len());
     
-    // Clean up
-    drop(container);
     Ok(())
 }
