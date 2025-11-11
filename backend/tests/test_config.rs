@@ -19,6 +19,7 @@ fn load_valid_config_file_returns_config_object() {
     let config_content = r#"
         discovery_interval: 30
         docker_socket_path: "/var/run/docker.sock"
+        bind_address: "127.0.0.1:8080"
         logging_level: "info"
         log_file_path: "/var/log/app.log"
         metrics_log_file_path: "/var/log/metrics.log"
@@ -43,6 +44,7 @@ fn load_invalid_discovery_interval_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 1
         docker_socket_path: "/var/run/docker.sock"
+        bind_address: "127.0.0.1:8080"
         logging_level: "info"
         log_file_path: "/var/log/app.log"
         metrics_log_file_path: "/var/log/metrics.log"
@@ -61,6 +63,7 @@ fn load_invalid_log_level_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 30
         docker_socket_path: "/var/run/docker.sock"
+        bind_address: "127.0.0.1:8080"
         logging_level: "invalid"
         log_file_path: "/var/log/app.log"
         metrics_log_file_path: "/var/log/metrics.log"
@@ -79,6 +82,7 @@ fn load_invalid_theme_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 30
         docker_socket_path: "/var/run/docker.sock"
+        bind_address: "127.0.0.1:8080"
         logging_level: "info"
         log_file_path: "/var/log/app.log"
         metrics_log_file_path: "/var/log/metrics.log"
@@ -97,6 +101,7 @@ fn load_empty_username_returns_validation_error() {
     let config_content = r#"
         discovery_interval: 30
         docker_socket_path: "/var/run/docker.sock"
+        bind_address: "127.0.0.1:8080"
         logging_level: "info"
         log_file_path: "/var/log/app.log"
         metrics_log_file_path: "/var/log/metrics.log"
@@ -122,6 +127,25 @@ fn with_defaults_when_called_returns_default_config() {
     
     // Validate that default config passes validation
     assert!(config.validate().is_ok());
+}
+
+#[test_log::test]
+fn load_invalid_bind_address_returns_validation_error() {
+    let config_content = r#"
+        discovery_interval: 30
+        docker_socket_path: "/var/run/docker.sock"
+        bind_address: "invalid_address"
+        logging_level: "info"
+        log_file_path: "/var/log/app.log"
+        metrics_log_file_path: "/var/log/metrics.log"
+        frontend_theme: "light"
+        auth:
+          username: "admin"
+    "#;
+
+    let (_dir, config_path) = create_test_config(config_content);
+    let result = Config::load(config_path);
+    assert!(matches!(result, Err(ConfigError::ValidationError(_))));
 }
 
 #[test_log::test]

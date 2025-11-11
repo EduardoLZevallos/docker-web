@@ -72,7 +72,7 @@ async fn containers_endpoint_returns_container_list() {
 async fn containers_endpoint_with_test_container() {
     // GIVEN a test container is running
     let nginx_image = GenericImage::new("nginx", "latest")
-        .with_wait_for(WaitFor::message_on_stderr("start worker process"));
+        .with_wait_for(WaitFor::seconds(3));
     
     let _container = nginx_image.start().await;
     
@@ -107,8 +107,8 @@ async fn containers_endpoint_with_test_container() {
     let containers = json.as_array().unwrap();
     assert!(containers.len() > 0, "Expected at least one container");
     
-    // Debug: Print the first container to see the actual structure
-    println!("First container: {}", containers[0]);
+    // Debug: Log the first container to see the actual structure
+    log::debug!("First container: {}", containers[0]);
     
     // AND the container should have expected fields
     let container = &containers[0];

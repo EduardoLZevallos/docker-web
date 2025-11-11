@@ -53,9 +53,14 @@ async fn new_client_with_invalid_socket_fails() {
 async fn list_running_containers_with_testcontainer() -> Result<(), DockerError> {
     use testcontainers::{GenericImage, runners::AsyncRunner};
     
-    // GIVEN a running test container
+    // GIVEN a running test container with explicit cleanup
     let nginx_image = GenericImage::new("nginx", "alpine");
-    let _container = nginx_image.start().await;
+    let container = nginx_image.start().await;
+    
+    // Ensure cleanup even on panic
+    let _cleanup_guard = scopeguard::guard((), |_| {
+        log::debug!("Test cleanup: container will be automatically dropped");
+    });
     
     // Give the container a moment to fully start
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -75,20 +80,25 @@ async fn list_running_containers_with_testcontainer() -> Result<(), DockerError>
         .find(|c| c.status.contains("Up"));
     assert!(running_container.is_some(), "Expected to find a running container");
     
+    drop(container); // Explicit cleanup
     Ok(())
-    // Container is automatically cleaned up when it goes out of scope
 }
 
 #[test_log::test(tokio::test)]
 async fn list_running_containers_with_multiple_testcontainers() -> Result<(), DockerError> {
     use testcontainers::{GenericImage, runners::AsyncRunner};
     
-    // GIVEN multiple running test containers
+    // GIVEN multiple running test containers with explicit cleanup
     let nginx_image = GenericImage::new("nginx", "alpine");
     let alpine_image = GenericImage::new("alpine", "latest");
     
-    let _nginx_container = nginx_image.start().await;
-    let _alpine_container = alpine_image.start().await;
+    let nginx_container = nginx_image.start().await;
+    let alpine_container = alpine_image.start().await;
+    
+    // Ensure cleanup even on panic
+    let _cleanup_guard = scopeguard::guard((), |_| {
+        log::debug!("Test cleanup: containers will be automatically dropped");
+    });
     
     // Give containers time to start
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -111,6 +121,8 @@ async fn list_running_containers_with_multiple_testcontainers() -> Result<(), Do
         assert!(container.created > 0, "Container created timestamp should be positive");
     }
     
+    // Explicit cleanup
+    drop(nginx_container);
+    drop(alpine_container);
     Ok(())
-    // Containers are automatically cleaned up when they go out of scope
 }

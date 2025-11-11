@@ -8,3 +8,6 @@
 # Rust
 - when adding crates always use cargo add <crate_name>
 - backend folder is the rust project
+
+# Overall Project
+- don't hardcode config use environment variables and store in a .env file

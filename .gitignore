@@ -2,6 +2,7 @@
 /target/
 **/*.rs.bk
 Cargo.lock
+target/
 
 # React
 /frontend/docker-web-ui/node_modules/
