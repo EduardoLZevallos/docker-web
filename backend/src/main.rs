@@ -9,6 +9,13 @@ async fn main() -> std::io::Result<()> {
     
     // Initialize logging
     env_logger::init();
+    // Load configuration
+    let config_path = PathBuf::from("../config/config.yaml");
+    let config = Config::load(config_path)
+        .unwrap_or_else(|e| {
+            log::warn!("Failed to load config file: {}, using defaults", e);
+            Config::with_defaults()
+        });
 
     // Load configuration
     let config = Config::with_defaults();

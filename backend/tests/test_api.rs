@@ -50,7 +50,7 @@ async fn containers_endpoint_with_test_container() {
     // Wait a moment for container to be fully started
     sleep(Duration::from_secs(3)).await;
     
-    // AND a running API server  
+    // AND a running API server
     let config = Config::with_defaults();
     let app = test::init_service(
         App::new()
