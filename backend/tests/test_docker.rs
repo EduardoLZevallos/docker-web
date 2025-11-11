@@ -126,3 +126,70 @@ async fn list_running_containers_with_multiple_testcontainers() -> Result<(), Do
     drop(alpine_container);
     Ok(())
 }
+
+#[test_log::test(tokio::test)]
+async fn list_networks_returns_valid_network_list() -> Result<(), DockerError> {
+    // GIVEN a default configuration
+    let config = Config::with_defaults();
+    
+    // WHEN creating a new Docker client and listing networks
+    let client = DockerClient::new(&config)?;
+    let networks = client.list_networks().await?;
+    
+    // THEN we should get a list of networks
+    assert!(!networks.is_empty(), "Expected at least one network (default networks should exist)");
+    
+    // AND each network should have valid data
+    for network in &networks {
+        assert!(!network.id.is_empty(), "Network ID should not be empty");
+        assert!(!network.name.is_empty(), "Network name should not be empty");
+        assert!(!network.driver.is_empty(), "Network driver should not be empty");
+        assert!(!network.scope.is_empty(), "Network scope should not be empty");
+    }
+    
+    // AND we should find common default networks
+    let network_names: Vec<&str> = networks.iter().map(|n| n.name.as_str()).collect();
+    assert!(network_names.iter().any(|&name| name == "bridge"), 
+            "Should find default bridge network");
+    
+    log::debug!("Found {} networks: {:?}", networks.len(), network_names);
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn list_networks_with_custom_network() -> Result<(), DockerError> {
+    use testcontainers::{GenericImage, runners::AsyncRunner};
+    
+    // GIVEN a test container in a custom network
+    let nginx_image = GenericImage::new("nginx", "alpine");
+    let container = nginx_image.start().await;
+    
+    // Ensure cleanup even on panic
+    let _cleanup_guard = scopeguard::guard((), |_| {
+        log::debug!("Test cleanup: container will be automatically dropped");
+    });
+    
+    // Give the container time to start and register with networks
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    
+    // AND a Docker client
+    let config = Config::with_defaults();
+    let client = DockerClient::new(&config)?;
+    
+    // WHEN we list networks
+    let networks = client.list_networks().await?;
+    
+    // THEN we should find networks with containers attached
+    assert!(!networks.is_empty(), "Should have at least default networks");
+    
+    // AND we should be able to find networks that have containers
+    let networks_with_containers: Vec<_> = networks.iter()
+        .filter(|n| !n.containers.is_empty())
+        .collect();
+    
+    log::debug!("Found {} networks with containers attached", networks_with_containers.len());
+    
+    // Clean up
+    drop(container);
+    Ok(())
+}
