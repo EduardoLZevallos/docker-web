@@ -30,3 +30,5 @@ dotenvy = "0.15.7"
 tempfile = "3.8"    # For creating temporary test files
 test-log = "0.2"    # For capturing logs in tests
 testcontainers = "0.16"  # For Docker integration testing
+reqwest = { version = "0.11", features = ["json"] }  # HTTP client for testing API
+tokio-test = "0.4"  # Async testing utilities
