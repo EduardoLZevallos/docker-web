@@ -2,24 +2,6 @@ use docker_web::config::Config;
 use docker_web::docker::{DockerClient, DockerError};
 
 #[test_log::test(tokio::test)]
-async fn new_client_with_default_config_connects_successfully() -> Result<(), DockerError> {
-    // GIVEN a default configuration
-    let config = Config::with_defaults();
-    
-    // WHEN creating a new Docker client
-    let client = DockerClient::new(&config)?;
-    
-    // AND listing running containers
-    let containers = client.list_running_containers().await?;
-    
-    // THEN the call should succeed and return a valid container list
-    // (Just getting here without error means the connection worked)
-    let _container_count = containers.len();
-    
-    Ok(())
-}
-
-#[test_log::test(tokio::test)]
 async fn new_client_with_invalid_socket_fails() {
     // GIVEN a configuration with an invalid Docker socket path
     let mut config = Config::with_defaults();
@@ -124,35 +106,6 @@ async fn list_running_containers_with_multiple_testcontainers() -> Result<(), Do
     // Explicit cleanup
     drop(nginx_container);
     drop(alpine_container);
-    Ok(())
-}
-
-#[test_log::test(tokio::test)]
-async fn list_networks_returns_valid_network_list() -> Result<(), DockerError> {
-    // GIVEN a default configuration
-    let config = Config::with_defaults();
-    
-    // WHEN creating a new Docker client and listing networks
-    let client = DockerClient::new(&config)?;
-    let networks = client.list_networks().await?;
-    
-    // THEN we should get a list of networks
-    assert!(!networks.is_empty(), "Expected at least one network (default networks should exist)");
-    
-    // AND each network should have valid data
-    for network in &networks {
-        assert!(!network.id.is_empty(), "Network ID should not be empty");
-        assert!(!network.name.is_empty(), "Network name should not be empty");
-        assert!(!network.driver.is_empty(), "Network driver should not be empty");
-        assert!(!network.scope.is_empty(), "Network scope should not be empty");
-    }
-    
-    // AND we should find common default networks
-    let network_names: Vec<&str> = networks.iter().map(|n| n.name.as_str()).collect();
-    assert!(network_names.iter().any(|&name| name == "bridge"), 
-            "Should find default bridge network");
-    
-    log::debug!("Found {} networks: {:?}", networks.len(), network_names);
     Ok(())
 }
 

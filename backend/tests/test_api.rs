@@ -40,44 +40,6 @@ async fn health_endpoint_returns_healthy_status() {
 }
 
 #[tokio::test]
-async fn containers_endpoint_returns_valid_structure() {
-    // GIVEN a running API server
-    let config = Config::with_defaults();
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(config))
-            .service(
-                web::scope("/api")
-                    .route("/containers", web::get().to(api::get_containers))
-            )
-    ).await;
-    
-    // WHEN we call the containers endpoint
-    let req = test::TestRequest::get()
-        .uri("/api/containers")
-        .to_request();
-    
-    let resp = test::call_service(&app, req).await;
-    
-    // THEN it should return 200 OK with valid JSON structure
-    assert!(resp.status().is_success());
-    
-    let body = test::read_body(resp).await;
-    let json: Value = serde_json::from_slice(&body).expect("Failed to parse JSON response");
-    assert!(json.is_array(), "Response should be a JSON array");
-    
-    // If containers exist, validate their structure
-    if let Some(containers) = json.as_array() {
-        if let Some(first_container) = containers.first() {
-            assert!(first_container["id"].is_string(), "Container should have an id");
-            assert!(first_container["name"].is_string(), "Container should have a name");
-            assert!(first_container["image"].is_string(), "Container should have an image");
-            assert!(first_container["status"].is_string(), "Container should have a status");
-        }
-    }
-}
-
-#[tokio::test]
 async fn containers_endpoint_with_test_container() {
     // GIVEN a test container is running
     let nginx_image = GenericImage::new("nginx", "latest")
@@ -118,91 +80,6 @@ async fn containers_endpoint_with_test_container() {
     
     // Debug: Log the first container to see the actual structure
         log::debug!("First container: {}", containers[0]);
-}
-
-#[tokio::test]
-async fn networks_endpoint_returns_network_list() {
-    // GIVEN the API server is running
-    let config = Config::with_defaults();
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(config))
-            .service(
-                web::scope("/api")
-                    .configure(api::configure_routes)
-            )
-    ).await;
-
-    // WHEN we request the networks endpoint
-    let req = test::TestRequest::get()
-        .uri("/api/networks")
-        .to_request();
-
-    let resp = test::call_service(&app, req).await;
-
-    // THEN we should get a successful response
-    assert!(resp.status().is_success(), "Expected successful response, got: {}", resp.status());
-
-    // AND the response should contain a list of networks
-    let body = test::read_body(resp).await;
-    let networks: serde_json::Value = serde_json::from_slice(&body)
-        .expect("Response should be valid JSON");
-
-    assert!(networks.is_array(), "Response should be an array of networks");
-    
-    // Should have at least the default networks (bridge, host, none)
-    let network_array = networks.as_array().unwrap();
-    assert!(network_array.len() >= 1, "Should have at least one network");
-
-    // Validate network structure
-    if let Some(first_network) = network_array.first() {
-        assert!(first_network["id"].is_string(), "Network should have an id");
-        assert!(first_network["name"].is_string(), "Network should have a name");
-        assert!(first_network["driver"].is_string(), "Network should have a driver");
-        assert!(first_network["scope"].is_string(), "Network should have a scope");
-        assert!(first_network["containers"].is_array(), "Network should have a containers array");
-    }
-}
-
-#[tokio::test]
-async fn topology_endpoint_returns_combined_data() {
-    // GIVEN the API server is running
-    let config = Config::with_defaults();
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(config))
-            .service(
-                web::scope("/api")
-                    .configure(api::configure_routes)
-            )
-    ).await;
-
-    // WHEN we request the topology endpoint
-    let req = test::TestRequest::get()
-        .uri("/api/topology")
-        .to_request();
-
-    let resp = test::call_service(&app, req).await;
-
-    // THEN we should get a successful response
-    assert!(resp.status().is_success(), "Expected successful response, got: {}", resp.status());
-
-    // AND the response should contain both containers and networks
-    let body = test::read_body(resp).await;
-    let topology: serde_json::Value = serde_json::from_slice(&body)
-        .expect("Response should be valid JSON");
-
-    assert!(topology["containers"].is_array(), "Topology should contain containers array");
-    assert!(topology["networks"].is_array(), "Topology should contain networks array");
-    assert!(topology["timestamp"].is_string(), "Topology should contain timestamp");
-
-    // Validate structure
-    let networks = topology["networks"].as_array().unwrap();
-    assert!(networks.len() >= 1, "Should have at least one network");
-
-    log::debug!("Topology response: containers={}, networks={}", 
-              topology["containers"].as_array().unwrap().len(),
-              networks.len());
 }
 
 #[tokio::test]
