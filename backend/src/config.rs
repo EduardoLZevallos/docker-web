@@ -30,6 +30,9 @@ pub struct Config {
     #[validate(custom = "validate_socket_path")]
     pub docker_socket_path: String,
 
+    #[validate(custom = "validate_bind_address")]
+    pub bind_address: String,
+
     pub reverse_proxy_url: Option<String>,
 
     #[validate(custom = "validate_log_level")]
@@ -55,7 +58,21 @@ fn validate_socket_path(path: &str) -> Result<(), ValidationError> {
     Ok(())
 }
 
+fn validate_bind_address(address: &str) -> Result<(), ValidationError> {
+    if address.is_empty() {
+        return Err(ValidationError::new("Bind address cannot be empty"));
+    }
+    // Basic validation for IP:PORT format
+    if !address.contains(':') {
+        return Err(ValidationError::new("Bind address must include port (e.g., 127.0.0.1:8080)"));
+    }
+    Ok(())
+}
+
 fn validate_log_level(level: &str) -> Result<(), ValidationError> {
+    if level.is_empty() {
+        return Err(ValidationError::new("Log level cannot be empty"));
+    }
     match level.to_lowercase().as_str() {
         "debug" | "info" | "warn" | "error" => Ok(()),
         _ => Err(ValidationError::new("Invalid log level")),
@@ -70,6 +87,9 @@ fn validate_file_path(path: &str) -> Result<(), ValidationError> {
 }
 
 fn validate_theme(theme: &str) -> Result<(), ValidationError> {
+    if theme.is_empty() {
+        return Err(ValidationError::new("Theme cannot be empty"));
+    }
     match theme.to_lowercase().as_str() {
         "light" | "dark" => Ok(()),
         _ => Err(ValidationError::new("Theme must be either 'light' or 'dark'")),
@@ -122,6 +142,7 @@ impl Config {
         Self {
             discovery_interval: 30,
             docker_socket_path: String::from("/var/run/docker.sock"),
+            bind_address: std::env::var("BIND_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8080".to_string()),
             reverse_proxy_url: None,
             logging_level: String::from("info"),
             log_file_path: String::from("/var/log/docker-web.log"),
