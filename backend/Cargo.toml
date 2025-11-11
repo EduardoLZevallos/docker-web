@@ -18,10 +18,11 @@ thiserror = "1.0"  # For error handling
 validator = { version = "0.16", features = ["derive"] }
 log = "0.4"        # Logging interface
 env_logger = "0.10"  # Logging implementation
-bollard = "0.15"   # Docker API client
+bollard = "0.16"   # Docker API client
 tokio = { version = "1.32", features = ["full"] }  # Async runtime for bollard
 futures-util = "0.3"  # Utilities for working with futures
 
 [dev-dependencies]
 tempfile = "3.8"    # For creating temporary test files
 test-log = "0.2"    # For capturing logs in tests
+testcontainers = "0.16"  # For Docker integration testing
