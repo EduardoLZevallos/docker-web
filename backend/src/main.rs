@@ -31,7 +31,7 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(docker_client.clone()))
-            .app_data(web::Data::from(config.clone())) // Share config without cloning for each worker
+            .app_data(web::Data::from(config.clone())) // Share Arc<Config> across workers (cheap Arc clone)
             .wrap(Logger::default())
             .service(
                 web::scope("/api")
