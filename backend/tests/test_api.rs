@@ -1,9 +1,21 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use actix_web::{test, App, web};
+use bollard::Docker;
+use bollard::network::CreateNetworkOptions;
 use docker_web::{api, config::Config, docker::DockerClient};
 use serde_json::Value;
 use std::time::Duration;
 use testcontainers::{core::WaitFor, runners::AsyncRunner, GenericImage};
 use tokio::time::sleep;
+
+static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn unique_network_name(prefix: &str) -> String {
+    let pid = std::process::id();
+    let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+    format!("{}_{}_{}", prefix, pid, counter)
+}
 
 fn create_test_docker_client() -> DockerClient {
     let config = Config::with_defaults();
@@ -13,6 +25,51 @@ fn create_test_docker_client() -> DockerClient {
 
 fn create_test_config() -> Config {
     Config::with_defaults()
+}
+
+async fn create_test_network(docker: &Docker, prefix: &str) -> (String, String) {
+    let name = unique_network_name(prefix);
+    let options = CreateNetworkOptions {
+        name: name.clone(),
+        driver: "bridge".to_string(),
+        ..Default::default()
+    };
+    let response = docker.create_network(options).await.unwrap();
+    let id = response.id.as_ref().unwrap().clone();
+    sleep(Duration::from_secs(1)).await;
+    (name, id)
+}
+
+async fn remove_test_network(docker: &Docker, name: &str) {
+    if let Err(e) = docker.remove_network(name).await {
+        log::warn!("Failed to cleanup test network {}: {}", name, e);
+    }
+}
+
+struct NetworkGuard {
+    docker: Docker,
+    name: String,
+}
+
+impl NetworkGuard {
+    fn new(docker: Docker, name: String) -> Self {
+        NetworkGuard { docker, name }
+    }
+}
+
+impl Drop for NetworkGuard {
+    fn drop(&mut self) {
+        let docker = self.docker.clone();
+        let name = self.name.clone();
+        let handle = tokio::runtime::Handle::try_current();
+        if let Ok(handle) = handle {
+            handle.spawn(async move {
+                if let Err(e) = docker.remove_network(&name).await {
+                    log::warn!("Failed to cleanup test network {}: {}", name, e);
+                }
+            });
+        }
+    }
 }
 
 #[tokio::test]
@@ -102,33 +159,13 @@ async fn get_containers_with_test_container_returns_container_list() {
     assert!(json.is_array());
     let containers = json.as_array().unwrap();
     assert!(!containers.is_empty(), "Expected at least one container");
-
-    log::debug!("First container: {}", containers[0]);
 }
 
 #[tokio::test]
 async fn get_networks_with_custom_network_returns_network_list() {
-    use bollard::Docker;
-    use bollard::network::CreateNetworkOptions;
-
     let docker = Docker::connect_with_socket_defaults().unwrap();
-
-    let network_name = format!(
-        "test_network_api_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    );
-    let create_options = CreateNetworkOptions {
-        name: network_name.to_string(),
-        driver: "bridge".to_string(),
-        ..Default::default()
-    };
-
-    let _network_response = docker.create_network(create_options).await.unwrap();
-
-    sleep(Duration::from_secs(1)).await;
+    let (network_name, _network_id) = create_test_network(&docker, "test_net_api").await;
+    let _guard = NetworkGuard::new(docker.clone(), network_name.clone());
 
     let docker_client = create_test_docker_client();
     let app = test::init_service(
@@ -160,34 +197,15 @@ async fn get_networks_with_custom_network_returns_network_list() {
     assert_eq!(custom_network["driver"], "bridge");
     assert_eq!(custom_network["scope"], "local");
 
-    if let Err(e) = docker.remove_network(&network_name).await {
-        log::warn!("Failed to cleanup test network: {}", e);
-    }
+    remove_test_network(&docker, &network_name).await;
 }
 
 #[tokio::test]
 async fn get_topology_with_custom_network_and_container_returns_combined_data() {
-    use testcontainers::{GenericImage, runners::AsyncRunner, core::WaitFor};
-    use bollard::Docker;
-    use bollard::network::CreateNetworkOptions;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     let docker = Docker::connect_with_socket_defaults().unwrap();
 
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let network_name = format!("test_topology_network_{}", timestamp);
-
-    let create_network_options = CreateNetworkOptions {
-        name: network_name.to_string(),
-        driver: "bridge".to_string(),
-        ..Default::default()
-    };
-
-    let _network_response = docker.create_network(create_network_options).await.unwrap();
-    sleep(Duration::from_secs(1)).await;
+    let (network_name, _network_id) = create_test_network(&docker, "test_topo").await;
+    let _guard = NetworkGuard::new(docker.clone(), network_name.clone());
 
     let nginx_image = GenericImage::new("nginx", "latest")
         .with_wait_for(WaitFor::seconds(3));
@@ -260,7 +278,5 @@ async fn get_topology_with_custom_network_and_container_returns_combined_data() 
         edges.len()
     );
 
-    if let Err(e) = docker.remove_network(&network_name).await {
-        log::warn!("Failed to cleanup test network: {}", e);
-    }
+    remove_test_network(&docker, &network_name).await;
 }

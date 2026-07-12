@@ -39,7 +39,7 @@ async fn list_running_containers_with_testcontainer_returns_containers_list(
     use testcontainers::{GenericImage, runners::AsyncRunner};
 
     let nginx_image = GenericImage::new("nginx", "alpine");
-    let container = nginx_image.start().await;
+    let _container = nginx_image.start().await;
 
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
@@ -66,8 +66,8 @@ async fn list_running_containers_with_multiple_testcontainers_returns_multiple_c
     let nginx_image = GenericImage::new("nginx", "alpine");
     let alpine_image = GenericImage::new("alpine", "latest");
 
-    let nginx_container = nginx_image.start().await;
-    let alpine_container = alpine_image.start().await;
+    let _nginx_container = nginx_image.start().await;
+    let _alpine_container = alpine_image.start().await;
 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
@@ -103,7 +103,7 @@ async fn list_networks_with_custom_network_returns_network_with_containers(
     use testcontainers::{GenericImage, runners::AsyncRunner};
 
     let nginx_image = GenericImage::new("nginx", "alpine");
-    let container = nginx_image.start().await;
+    let _container = nginx_image.start().await;
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
