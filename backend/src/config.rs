@@ -51,6 +51,9 @@ pub struct Config {
     #[validate(custom = "validate_theme")]
     pub frontend_theme: String,
 
+    #[serde(default)]
+    pub demo_mode: bool,
+
     #[validate]
     pub auth: Auth,
 }
@@ -153,12 +156,13 @@ impl Config {
                 .ok()
                 .and_then(|t| t.parse().ok())
                 .unwrap_or(120),
-            bind_address: std::env::var("BIND_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8080".to_string()),
+            bind_address: std::env::var("BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0:3000".to_string()),
             reverse_proxy_url: None,
             logging_level: String::from("info"),
             log_file_path: String::from("/var/log/docker-web.log"),
             metrics_log_file_path: String::from("/var/log/docker-web-metrics.log"),
             frontend_theme: String::from("light"),
+            demo_mode: false,
             auth: Auth {
                 username: String::from("admin"),
                 password_hash: None,
