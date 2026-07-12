@@ -42,6 +42,11 @@ impl DockerClient {
         Ok(DockerClient { client })
     }
 
+    pub async fn ping(&self) -> Result<(), DockerError> {
+        self.client.ping().await?;
+        Ok(())
+    }
+
     pub fn new_with_defaults() -> Result<Self, DockerError> {
         let socket_path = std::env::var("DOCKER_SOCKET_PATH")
             .unwrap_or_else(|_| "/var/run/docker.sock".to_string());

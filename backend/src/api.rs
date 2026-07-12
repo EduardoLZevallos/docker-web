@@ -4,7 +4,7 @@ use actix_web::{web, HttpResponse, Result as ActixResult};
 use serde::Serialize;
 
 use crate::config::Config;
-use crate::docker::DockerClient;
+use crate::docker::{DockerClient, DockerError};
 
 #[derive(Serialize)]
 struct Edge {
@@ -12,9 +12,34 @@ struct Edge {
     target: String,
 }
 
-pub async fn health() -> ActixResult<HttpResponse> {
+fn docker_error_response(err: &DockerError) -> HttpResponse {
+    let status = match err {
+        DockerError::ConnectionError(_) => {
+            actix_web::http::StatusCode::SERVICE_UNAVAILABLE
+        }
+        DockerError::ContainerError(_) => {
+            actix_web::http::StatusCode::INTERNAL_SERVER_ERROR
+        }
+    };
+    let error_type = if matches!(err, DockerError::ConnectionError(_)) {
+        "Docker connection failed"
+    } else {
+        "Container operation failed"
+    };
+    let error_resp = serde_json::json!({
+        "error": error_type,
+        "message": err.to_string(),
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    });
+    HttpResponse::build(status).json(error_resp)
+}
+
+pub async fn health(docker_client: web::Data<DockerClient>) -> ActixResult<HttpResponse> {
+    let docker_reachable = docker_client.ping().await.is_ok();
+
     let health_resp = serde_json::json!({
-        "status": "healthy",
+        "status": if docker_reachable { "healthy" } else { "degraded" },
+        "docker": docker_reachable,
         "service": "docker-web-api",
         "timestamp": chrono::Utc::now().to_rfc3339(),
         "version": env!("CARGO_PKG_VERSION")
@@ -33,12 +58,7 @@ pub async fn get_containers(
         }
         Err(err) => {
             log::error!("Container operation error: {}", err);
-            let error_resp = serde_json::json!({
-                "error": "Container operation failed",
-                "message": err.to_string(),
-                "timestamp": chrono::Utc::now().to_rfc3339()
-            });
-            Ok(HttpResponse::InternalServerError().json(error_resp))
+            Ok(docker_error_response(&err))
         }
     }
 }
@@ -53,12 +73,7 @@ pub async fn get_networks(
         }
         Err(err) => {
             log::error!("Network operation error: {}", err);
-            let error_resp = serde_json::json!({
-                "error": "Network operation failed",
-                "message": err.to_string(),
-                "timestamp": chrono::Utc::now().to_rfc3339()
-            });
-            Ok(HttpResponse::InternalServerError().json(error_resp))
+            Ok(docker_error_response(&err))
         }
     }
 }
@@ -107,21 +122,11 @@ pub async fn get_network_topology(
         }
         (Err(container_err), _) => {
             log::error!("Failed to retrieve containers: {}", container_err);
-            let error_resp = serde_json::json!({
-                "error": "Failed to retrieve containers",
-                "message": container_err.to_string(),
-                "timestamp": chrono::Utc::now().to_rfc3339()
-            });
-            Ok(HttpResponse::InternalServerError().json(error_resp))
+            Ok(docker_error_response(&container_err))
         }
         (_, Err(network_err)) => {
             log::error!("Failed to retrieve networks: {}", network_err);
-            let error_resp = serde_json::json!({
-                "error": "Failed to retrieve networks",
-                "message": network_err.to_string(),
-                "timestamp": chrono::Utc::now().to_rfc3339()
-            });
-            Ok(HttpResponse::InternalServerError().json(error_resp))
+            Ok(docker_error_response(&network_err))
         }
     }
 }

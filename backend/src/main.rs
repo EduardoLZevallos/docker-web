@@ -26,7 +26,7 @@ async fn main() -> std::io::Result<()> {
 
     let bind_address = config.bind_address.clone();
     info!("Starting server on {}", bind_address);
-    HttpServer::new(move || {
+    let server = HttpServer::new(move || {
         let cors = Cors::default()
             .allowed_origin("http://localhost:5173")
             .allowed_methods(vec!["GET", "POST"])
@@ -45,6 +45,15 @@ async fn main() -> std::io::Result<()> {
             )
     })
     .bind(&bind_address)?
-    .run()
-    .await
+    .run();
+
+    let server_handle = server.handle();
+
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        info!("Shutdown signal received, stopping server gracefully...");
+        server_handle.stop(true).await;
+    });
+
+    server.await
 }
