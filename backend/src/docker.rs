@@ -47,28 +47,6 @@ impl DockerClient {
         Ok(())
     }
 
-    pub fn new_with_defaults() -> Result<Self, DockerError> {
-        let socket_path = std::env::var("DOCKER_SOCKET_PATH")
-            .unwrap_or_else(|_| "/var/run/docker.sock".to_string());
-        let timeout = std::env::var("DOCKER_TIMEOUT")
-            .ok()
-            .and_then(|t| t.parse().ok())
-            .unwrap_or(120);
-        let client =
-            Docker::connect_with_socket(&socket_path, timeout, bollard::API_DEFAULT_VERSION)?;
-        Ok(DockerClient { client })
-    }
-
-    pub fn new_with_socket(socket_path: &str) -> Result<Self, DockerError> {
-        let timeout = std::env::var("DOCKER_TIMEOUT")
-            .ok()
-            .and_then(|t| t.parse().ok())
-            .unwrap_or(120);
-        let client =
-            Docker::connect_with_socket(socket_path, timeout, bollard::API_DEFAULT_VERSION)?;
-        Ok(DockerClient { client })
-    }
-
     pub async fn list_running_containers(&self) -> Result<Vec<ContainerInfo>, DockerError> {
         let options = Some(ListContainersOptions::<String> {
             all: false,

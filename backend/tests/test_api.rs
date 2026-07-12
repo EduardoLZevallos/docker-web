@@ -6,7 +6,8 @@ use testcontainers::{core::WaitFor, runners::AsyncRunner, GenericImage};
 use tokio::time::sleep;
 
 fn create_test_docker_client() -> DockerClient {
-    DockerClient::new_with_defaults()
+    let config = Config::with_defaults();
+    DockerClient::new(&config)
         .expect("Failed to create DockerClient for testing - is Docker running?")
 }
 
