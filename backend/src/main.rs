@@ -2,7 +2,6 @@ use actix_cors::Cors;
 use actix_web::{web, App, HttpServer, http, middleware::Logger};
 use docker_web::{api, config::Config, docker::DockerClient};
 use log::info;
-use std::sync::Arc;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -12,10 +11,10 @@ async fn main() -> std::io::Result<()> {
 
     info!("Starting Docker Web API server...");
 
-    let config = Arc::new(Config::load("config/config.yaml").unwrap_or_else(|e| {
+    let config = Config::load("config/config.yaml").unwrap_or_else(|e| {
         log::error!("Failed to load configuration: {}", e);
         std::process::exit(1);
-    }));
+    });
     info!("Loaded configuration: bind address = {}", config.bind_address);
 
     let docker_client = DockerClient::new(&config)
@@ -38,7 +37,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(cors)
             .app_data(web::Data::new(docker_client.clone()))
-            .app_data(web::Data::from(config.clone()))
+            .app_data(web::Data::new(config.clone()))
             .wrap(Logger::default())
             .service(
                 web::scope("/api")
