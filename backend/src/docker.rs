@@ -214,7 +214,7 @@ impl DockerClient {
             }
             Err(e) => {
                 log::error!("Error inspecting network {}: {}", network_id, e);
-                Err(DockerError::ContainerError(e.to_string()))
+                Err(e.into())
             }
         }
     }

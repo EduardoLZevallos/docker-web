@@ -98,7 +98,7 @@ async fn list_running_containers_with_multiple_testcontainers_returns_multiple_c
 }
 
 #[test_log::test(tokio::test)]
-async fn list_networks_with_custom_network_returns_network_with_containers(
+async fn list_networks_with_running_container_finds_networks_with_containers(
 ) -> Result<(), DockerError> {
     use testcontainers::{GenericImage, runners::AsyncRunner};
 

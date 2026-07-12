@@ -50,8 +50,20 @@ async fn main() -> std::io::Result<()> {
     let server_handle = server.handle();
 
     tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        info!("Shutdown signal received, stopping server gracefully...");
+        let mut sigterm = tokio::signal::unix::signal(
+            tokio::signal::unix::SignalKind::terminate(),
+        )
+        .expect("failed to register SIGTERM handler");
+
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                info!("SIGINT received, stopping server gracefully...");
+            }
+            _ = sigterm.recv() => {
+                info!("SIGTERM received, stopping server gracefully...");
+            }
+        }
+
         server_handle.stop(true).await;
     });
 

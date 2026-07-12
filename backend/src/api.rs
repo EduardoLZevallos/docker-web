@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use actix_web::{web, HttpResponse, Result as ActixResult};
 use serde::Serialize;
@@ -35,7 +36,10 @@ fn docker_error_response(err: &DockerError) -> HttpResponse {
 }
 
 pub async fn health(docker_client: web::Data<DockerClient>) -> ActixResult<HttpResponse> {
-    let docker_reachable = docker_client.ping().await.is_ok();
+    let docker_reachable = tokio::time::timeout(Duration::from_secs(5), docker_client.ping())
+        .await
+        .map(|r| r.is_ok())
+        .unwrap_or(false);
 
     let health_resp = serde_json::json!({
         "status": if docker_reachable { "healthy" } else { "degraded" },

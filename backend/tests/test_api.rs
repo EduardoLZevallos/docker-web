@@ -202,16 +202,33 @@ async fn get_networks_with_custom_network_returns_network_list() {
 
 #[tokio::test]
 async fn get_topology_with_custom_network_and_container_returns_combined_data() {
+    use bollard::network::ConnectNetworkOptions;
+
     let docker = Docker::connect_with_socket_defaults().unwrap();
 
-    let (network_name, _network_id) = create_test_network(&docker, "test_topo").await;
+    let (network_name, network_id) = create_test_network(&docker, "test_topo").await;
     let _guard = NetworkGuard::new(docker.clone(), network_name.clone());
 
     let nginx_image = GenericImage::new("nginx", "latest")
         .with_wait_for(WaitFor::seconds(3));
 
-    let _container = nginx_image.start().await;
+    let container = nginx_image.start().await;
     sleep(Duration::from_secs(4)).await;
+
+    let container_id = container.id().to_string();
+
+    docker
+        .connect_network(
+            &network_id,
+            ConnectNetworkOptions {
+                container: container_id.clone(),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("Failed to connect container to custom network");
+
+    sleep(Duration::from_secs(1)).await;
 
     let docker_client = create_test_docker_client();
     let app = test::init_service(
@@ -242,15 +259,17 @@ async fn get_topology_with_custom_network_and_container_returns_combined_data() 
     let containers = topology["containers"].as_array().unwrap();
     let edges = topology["edges"].as_array().unwrap();
 
-    let _custom_network = networks
+    let custom_network = networks
         .iter()
         .find(|n| n["name"].as_str().unwrap() == network_name)
         .expect("Should find custom network in topology");
 
+    let custom_network_id = custom_network["id"].as_str().unwrap();
+
     let nginx_container = containers
         .iter()
-        .find(|c| c["image"].as_str().unwrap_or("").contains("nginx"))
-        .expect("Should find nginx container");
+        .find(|c| c["id"].as_str().unwrap() == container_id)
+        .expect("Should find nginx container by ID");
 
     assert!(nginx_container["name"].is_string());
     let container_status = nginx_container["status"].as_str().unwrap();
@@ -261,12 +280,15 @@ async fn get_topology_with_custom_network_and_container_returns_combined_data() 
         container_status
     );
 
-    let container_id = nginx_container["id"].as_str().unwrap();
-    let has_edge = edges.iter().any(|e| e["source"].as_str().unwrap() == container_id);
+    let has_edge_to_custom = edges.iter().any(|e| {
+        e["source"].as_str().unwrap() == container_id
+            && e["target"].as_str().unwrap() == custom_network_id
+    });
     assert!(
-        has_edge,
-        "Expected at least one edge from container {} to a network",
-        container_id
+        has_edge_to_custom,
+        "Expected edge from container {} to custom network {}",
+        container_id,
+        custom_network_id
     );
 
     assert!(networks.len() >= 4, "Should have at least 4 networks");
