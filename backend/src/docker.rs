@@ -23,13 +23,13 @@ pub struct DockerClient {
 }
 
 impl DockerClient {
-    fn port_protocol_to_string(protocol_type: Option<PortTypeEnum>) -> String {
+    fn port_protocol_to_string(protocol_type: Option<PortTypeEnum>) -> &'static str {
         match protocol_type {
-            Some(PortTypeEnum::TCP) => "tcp".to_string(),
-            Some(PortTypeEnum::UDP) => "udp".to_string(),
-            Some(PortTypeEnum::SCTP) => "sctp".to_string(),
-            Some(PortTypeEnum::EMPTY) => "tcp".to_string(),
-            None => "tcp".to_string(),
+            Some(PortTypeEnum::TCP) => "tcp",
+            Some(PortTypeEnum::UDP) => "udp",
+            Some(PortTypeEnum::SCTP) => "sctp",
+            Some(PortTypeEnum::EMPTY) => "tcp",
+            None => "tcp",
         }
     }
 
@@ -75,7 +75,7 @@ impl DockerClient {
                     .map(|p| PortInfo {
                         private: p.private_port,
                         public: p.public_port,
-                        protocol: Self::port_protocol_to_string(p.typ),
+                        protocol: Self::port_protocol_to_string(p.typ).into(),
                     })
                     .collect(),
                 networks: c.network_settings
@@ -132,7 +132,7 @@ impl DockerClient {
                     .map(|p| PortInfo {
                         private: p.private_port,
                         public: p.public_port,
-                        protocol: Self::port_protocol_to_string(p.typ),
+                        protocol: Self::port_protocol_to_string(p.typ).into(),
                     })
                     .collect(),
                 networks: c.network_settings

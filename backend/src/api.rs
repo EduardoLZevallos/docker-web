@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use actix_web::{web, HttpResponse, Result as ActixResult};
 use serde::Serialize;
+use time::OffsetDateTime;
 
 use crate::config::Config;
 use crate::docker::{DockerClient, DockerError};
@@ -11,6 +12,12 @@ use crate::docker::{DockerClient, DockerError};
 struct Edge {
     source: String,
     target: String,
+}
+
+fn timestamp_now() -> String {
+    OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
 }
 
 fn docker_error_response(err: &DockerError) -> HttpResponse {
@@ -30,7 +37,7 @@ fn docker_error_response(err: &DockerError) -> HttpResponse {
     let error_resp = serde_json::json!({
         "error": error_type,
         "message": err.to_string(),
-        "timestamp": chrono::Utc::now().to_rfc3339()
+        "timestamp": timestamp_now()
     });
     HttpResponse::build(status).json(error_resp)
 }
@@ -45,7 +52,7 @@ pub async fn health(docker_client: web::Data<DockerClient>) -> ActixResult<HttpR
         "status": if docker_reachable { "healthy" } else { "degraded" },
         "docker": docker_reachable,
         "service": "docker-web-api",
-        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "timestamp": timestamp_now(),
         "version": env!("CARGO_PKG_VERSION")
     });
 
@@ -119,7 +126,7 @@ pub async fn get_network_topology(
                 "containers": containers,
                 "networks": networks,
                 "edges": edges,
-                "timestamp": chrono::Utc::now().to_rfc3339()
+                "timestamp": timestamp_now()
             });
 
             Ok(HttpResponse::Ok().json(topology))

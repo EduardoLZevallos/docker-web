@@ -47,28 +47,21 @@ async fn remove_test_network(docker: &Docker, name: &str) {
 }
 
 struct NetworkGuard {
-    docker: Docker,
     name: String,
 }
 
 impl NetworkGuard {
-    fn new(docker: Docker, name: String) -> Self {
-        NetworkGuard { docker, name }
+    fn new(name: String) -> Self {
+        NetworkGuard { name }
     }
 }
 
 impl Drop for NetworkGuard {
     fn drop(&mut self) {
-        let docker = self.docker.clone();
-        let name = self.name.clone();
-        let handle = tokio::runtime::Handle::try_current();
-        if let Ok(handle) = handle {
-            handle.spawn(async move {
-                if let Err(e) = docker.remove_network(&name).await {
-                    log::warn!("Failed to cleanup test network {}: {}", name, e);
-                }
-            });
-        }
+        log::warn!(
+            "Test network '{}' was not explicitly cleaned up — may have leaked",
+            self.name
+        );
     }
 }
 
@@ -165,7 +158,7 @@ async fn get_containers_with_test_container_returns_container_list() {
 async fn get_networks_with_custom_network_returns_network_list() {
     let docker = Docker::connect_with_socket_defaults().unwrap();
     let (network_name, _network_id) = create_test_network(&docker, "test_net_api").await;
-    let _guard = NetworkGuard::new(docker.clone(), network_name.clone());
+    let _guard = NetworkGuard::new(network_name.clone());
 
     let docker_client = create_test_docker_client();
     let app = test::init_service(
@@ -207,7 +200,7 @@ async fn get_topology_with_custom_network_and_container_returns_combined_data() 
     let docker = Docker::connect_with_socket_defaults().unwrap();
 
     let (network_name, network_id) = create_test_network(&docker, "test_topo").await;
-    let _guard = NetworkGuard::new(docker.clone(), network_name.clone());
+    let _guard = NetworkGuard::new(network_name.clone());
 
     let nginx_image = GenericImage::new("nginx", "latest")
         .with_wait_for(WaitFor::seconds(3));
