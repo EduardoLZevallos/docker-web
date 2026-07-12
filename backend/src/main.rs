@@ -1,4 +1,5 @@
-use actix_web::{web, App, HttpServer, middleware::Logger};
+use actix_cors::Cors;
+use actix_web::{web, App, HttpServer, http, middleware::Logger};
 use docker_web::{api, config::Config, docker::DockerClient};
 use log::info;
 use std::sync::Arc;
@@ -27,7 +28,15 @@ async fn main() -> std::io::Result<()> {
     let bind_address = config.bind_address.clone();
     info!("Starting server on {}", bind_address);
     HttpServer::new(move || {
+        let cors = Cors::default()
+            .allowed_origin("http://localhost:5173")
+            .allowed_methods(vec!["GET", "POST"])
+            .allowed_headers(vec![http::header::AUTHORIZATION, http::header::ACCEPT])
+            .allowed_header(http::header::CONTENT_TYPE)
+            .max_age(3600);
+
         App::new()
+            .wrap(cors)
             .app_data(web::Data::new(docker_client.clone()))
             .app_data(web::Data::from(config.clone()))
             .wrap(Logger::default())
