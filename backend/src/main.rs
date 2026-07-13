@@ -1,23 +1,22 @@
-use actix_web::{web, App, HttpServer, middleware::Logger};
+use actix_cors::Cors;
+use actix_web::{web, App, HttpServer, http, middleware::Logger};
 use docker_web::{api, config::Config, docker::DockerClient};
 use log::info;
-use std::sync::Arc;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // Load environment variables from .env file (if it exists)
     dotenvy::dotenv().ok();
-    
-    // Initialize logging
+
     env_logger::init();
-    
+
     info!("Starting Docker Web API server...");
-    
-    // Load configuration for bind address (with proper validation) and wrap in Arc
-    let config = Arc::new(Config::with_defaults());
+
+    let config = Config::load("config/config.yaml").unwrap_or_else(|e| {
+        log::error!("Failed to load configuration: {}", e);
+        std::process::exit(1);
+    });
     info!("Loaded configuration: bind address = {}", config.bind_address);
 
-    // Create DockerClient once during startup using the config
     let docker_client = DockerClient::new(&config)
         .map_err(|e| {
             log::error!("Failed to create Docker client during startup: {}", e);
@@ -25,13 +24,20 @@ async fn main() -> std::io::Result<()> {
         })?;
     info!("Docker client initialized successfully");
 
-    // Start HTTP server
     let bind_address = config.bind_address.clone();
     info!("Starting server on {}", bind_address);
-    HttpServer::new(move || {
+    let server = HttpServer::new(move || {
+        let cors = Cors::default()
+            .allowed_origin("http://localhost:5173")
+            .allowed_methods(vec!["GET", "POST"])
+            .allowed_headers(vec![http::header::AUTHORIZATION, http::header::ACCEPT])
+            .allowed_header(http::header::CONTENT_TYPE)
+            .max_age(3600);
+
         App::new()
+            .wrap(cors)
             .app_data(web::Data::new(docker_client.clone()))
-            .app_data(web::Data::from(config.clone())) // Share Arc<Config> across workers (cheap Arc clone)
+            .app_data(web::Data::new(config.clone()))
             .wrap(Logger::default())
             .service(
                 web::scope("/api")
@@ -39,6 +45,37 @@ async fn main() -> std::io::Result<()> {
             )
     })
     .bind(&bind_address)?
-    .run()
-    .await
+    .run();
+
+    let server_handle = server.handle();
+
+    tokio::spawn(async move {
+        #[cfg(unix)]
+        let mut sigterm = tokio::signal::unix::signal(
+            tokio::signal::unix::SignalKind::terminate(),
+        )
+        .expect("failed to register SIGTERM handler");
+
+        #[cfg(unix)]
+        {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    info!("SIGINT received, stopping server gracefully...");
+                }
+                _ = sigterm.recv() => {
+                    info!("SIGTERM received, stopping server gracefully...");
+                }
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            tokio::signal::ctrl_c().await.ok();
+            info!("Shutdown signal received, stopping server gracefully...");
+        }
+
+        server_handle.stop(true).await;
+    });
+
+    server.await
 }

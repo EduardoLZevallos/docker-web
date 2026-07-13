@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bollard::container::ListContainersOptions;
 use bollard::network::ListNetworksOptions;
 use bollard::models::PortTypeEnum;
@@ -6,75 +8,60 @@ use thiserror::Error;
 
 use crate::config::Config;
 
+/// Errors that can occur when interacting with the Docker daemon.
 #[derive(Debug, Error)]
 pub enum DockerError {
+    /// The Docker daemon is unreachable or the connection was lost.
     #[error("Failed to connect to Docker daemon: {0}")]
     ConnectionError(#[from] bollard::errors::Error),
-    
+
+    /// An operation on a specific container or network failed.
     #[error("Container operation failed: {0}")]
     ContainerError(String),
 }
 
-/// Client for interacting with the Docker daemon
+/// Client for querying the local Docker daemon via its Unix socket.
 #[derive(Clone)]
 pub struct DockerClient {
     client: Docker,
 }
 
 impl DockerClient {
-    /// Helper function to convert Docker port protocol enum to string
-    fn port_protocol_to_string(protocol_type: Option<PortTypeEnum>) -> String {
+    fn port_protocol_to_string(protocol_type: Option<PortTypeEnum>) -> &'static str {
         match protocol_type {
-            Some(PortTypeEnum::TCP) => "tcp".to_string(),
-            Some(PortTypeEnum::UDP) => "udp".to_string(),
-            Some(PortTypeEnum::SCTP) => "sctp".to_string(),
-            Some(PortTypeEnum::EMPTY) => "tcp".to_string(), // Default to tcp for empty
-            None => "tcp".to_string(),
+            Some(PortTypeEnum::TCP) => "tcp",
+            Some(PortTypeEnum::UDP) => "udp",
+            Some(PortTypeEnum::SCTP) => "sctp",
+            Some(PortTypeEnum::EMPTY) => "tcp",
+            None => "tcp",
         }
     }
 
-    /// Create a new Docker client using the configuration
+    /// Create a new Docker client connected to the socket path from `config`.
     pub fn new(config: &Config) -> Result<Self, DockerError> {
         let client = Docker::connect_with_socket(
-            &config.docker_socket_path, 
-            config.docker_timeout_seconds, 
-            bollard::API_DEFAULT_VERSION
+            &config.docker_socket_path,
+            config.docker_timeout_seconds,
+            bollard::API_DEFAULT_VERSION,
         )?;
         Ok(DockerClient { client })
     }
 
-    /// Create a new Docker client with default configuration 
-    pub fn new_with_defaults() -> Result<Self, DockerError> {
-        let socket_path = std::env::var("DOCKER_SOCKET_PATH")
-            .unwrap_or_else(|_| "/var/run/docker.sock".to_string());
-        let timeout = std::env::var("DOCKER_TIMEOUT")
-            .ok()
-            .and_then(|t| t.parse().ok())
-            .unwrap_or(120);
-        let client = Docker::connect_with_socket(&socket_path, timeout, bollard::API_DEFAULT_VERSION)?;
-        Ok(DockerClient { client })
+    /// Ping the Docker daemon to verify connectivity.
+    pub async fn ping(&self) -> Result<(), DockerError> {
+        self.client.ping().await?;
+        Ok(())
     }
 
-    /// Create a new Docker client with a custom socket path (for testing)
-    pub fn new_with_socket(socket_path: &str) -> Result<Self, DockerError> {
-        let timeout = std::env::var("DOCKER_TIMEOUT")
-            .ok()
-            .and_then(|t| t.parse().ok())
-            .unwrap_or(120);
-        let client = Docker::connect_with_socket(socket_path, timeout, bollard::API_DEFAULT_VERSION)?;
-        Ok(DockerClient { client })
-    }
-
-    /// List all running containers
+    /// List all running containers with their ports and network attachments.
     pub async fn list_running_containers(&self) -> Result<Vec<ContainerInfo>, DockerError> {
         let options = Some(ListContainersOptions::<String> {
-            all: false,  // Only running containers
+            all: false,
             ..Default::default()
         });
 
         let containers = self.client.list_containers(options).await?;
-        
-        // Convert to our domain model
+
         let container_infos = containers
             .into_iter()
             .map(|c| ContainerInfo {
@@ -92,20 +79,22 @@ impl DockerClient {
                 ports: c.ports
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|p| {
-                        let protocol = Self::port_protocol_to_string(p.typ);
-                        let private = p.private_port.to_string();
-                        if let Some(public) = p.public_port {
-                            format!("{}:{}/{}", public, private, protocol)
-                        } else {
-                            format!("{}/{}", private, protocol)
-                        }
+                    .map(|p| PortInfo {
+                        private: p.private_port,
+                        public: p.public_port,
+                        protocol: Self::port_protocol_to_string(p.typ).into(),
                     })
                     .collect(),
                 networks: c.network_settings
                     .and_then(|ns| ns.networks)
                     .unwrap_or_default()
-                    .into_keys()
+                    .into_iter()
+                    .map(|(name, settings)| {
+                        (name, ContainerNetworkInfo {
+                            ip_address: settings.ip_address,
+                            mac_address: settings.mac_address,
+                        })
+                    })
                     .collect(),
             })
             .collect();
@@ -113,66 +102,14 @@ impl DockerClient {
         Ok(container_infos)
     }
 
-    /// Get a specific container by ID
-    pub async fn get_container_by_id(&self, container_id: &str) -> Result<Option<ContainerInfo>, DockerError> {
-        let options = Some(ListContainersOptions::<String> {
-            all: true,  // Include stopped containers
-            filters: {
-                let mut filters = std::collections::HashMap::new();
-                filters.insert("id".to_string(), vec![container_id.to_string()]);
-                filters
-            },
-            ..Default::default()
-        });
-
-        let containers = self.client.list_containers(options).await?;
-        
-        // Convert and return the first (should be only) match
-        let container_info = containers
-            .into_iter()
-            .next()
-            .map(|c| ContainerInfo {
-                id: c.id.unwrap_or_default(),
-                name: c.names
-                    .unwrap_or_default()
-                    .first()
-                    .cloned()
-                    .unwrap_or_default()
-                    .trim_start_matches('/')
-                    .to_string(),
-                image: c.image.unwrap_or_default(),
-                status: c.status.unwrap_or_default(),
-                created: c.created.unwrap_or_default(),
-                ports: c.ports.unwrap_or_default().into_iter().map(|p| {
-                    let protocol = Self::port_protocol_to_string(p.typ);
-                    if let Some(public_port) = p.public_port {
-                        format!("{}:{}:{}/{}", 
-                               p.ip.unwrap_or_else(|| "0.0.0.0".to_string()),
-                               public_port,
-                               p.private_port,
-                               protocol)
-                    } else {
-                        format!("{}/{}", p.private_port, protocol)
-                    }
-                }).collect(),
-                networks: c.network_settings
-                    .and_then(|ns| ns.networks)
-                    .unwrap_or_default()
-                    .into_keys()
-                    .collect(),
-            });
-
-        Ok(container_info)
-    }
-
-    /// List all Docker networks
+    /// List all Docker networks with subnet information and attached containers.
     pub async fn list_networks(&self) -> Result<Vec<NetworkInfo>, DockerError> {
         let options = Some(ListNetworksOptions::<String> {
             ..Default::default()
         });
 
         let networks = self.client.list_networks(options).await?;
-        
+
         let network_infos = networks
             .into_iter()
             .map(|n| NetworkInfo {
@@ -180,9 +117,12 @@ impl DockerClient {
                 name: n.name.unwrap_or_default(),
                 driver: n.driver.unwrap_or_default(),
                 scope: n.scope.unwrap_or_default(),
+                subnet: n.ipam.and_then(|ipam| {
+                    ipam.config.and_then(|configs| {
+                        configs.into_iter().next().and_then(|c| c.subnet)
+                    })
+                }),
                 internal: n.internal.unwrap_or(false),
-                attachable: n.attachable.unwrap_or(false),
-                created: n.created.unwrap_or_default(),
                 containers: n.containers
                     .unwrap_or_default()
                     .into_keys()
@@ -192,53 +132,29 @@ impl DockerClient {
 
         Ok(network_infos)
     }
-
-    /// Get a specific network by ID or name
-    pub async fn get_network_by_id(&self, network_id: &str) -> Result<Option<NetworkInfo>, DockerError> {
-        // First try to inspect the network directly
-        match self.client.inspect_network(network_id, None::<bollard::network::InspectNetworkOptions<String>>).await {
-            Ok(network) => {
-                let network_info = NetworkInfo {
-                    id: network.id.unwrap_or_default(),
-                    name: network.name.unwrap_or_default(),
-                    driver: network.driver.unwrap_or_default(),
-                    scope: network.scope.unwrap_or_default(),
-                    internal: network.internal.unwrap_or(false),
-                    attachable: network.attachable.unwrap_or(false),
-                    created: network.created.unwrap_or_default(),
-                    containers: network
-                        .containers
-                        .unwrap_or_default()
-                        .into_keys()
-                        .collect(),
-                };
-                Ok(Some(network_info))
-            },
-            Err(bollard::errors::Error::DockerResponseServerError { status_code: 404, .. }) => {
-                Ok(None)
-            },
-            Err(e) => {
-                log::error!("Error inspecting network {}: {}", network_id, e);
-                Err(DockerError::ContainerError(e.to_string()))
-            }
-        }
-    }
 }
 
-/// Domain model for network information
+/// A port mapping exposed by a container.
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct NetworkInfo {
-    pub id: String,
-    pub name: String,
-    pub driver: String,
-    pub scope: String,
-    pub internal: bool,
-    pub attachable: bool,
-    pub created: String,
-    pub containers: Vec<String>,
+pub struct PortInfo {
+    /// Container-side port number.
+    pub private: u16,
+    /// Host-side port number, if published.
+    pub public: Option<u16>,
+    /// Transport protocol (tcp, udp, or sctp).
+    pub protocol: String,
 }
 
-/// Domain model for container information
+/// Network attachment details for a container.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ContainerNetworkInfo {
+    /// IPv4 or IPv6 address assigned to the container on this network.
+    pub ip_address: Option<String>,
+    /// MAC address of the container's interface on this network.
+    pub mac_address: Option<String>,
+}
+
+/// A running Docker container with its metadata.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ContainerInfo {
     pub id: String,
@@ -246,6 +162,27 @@ pub struct ContainerInfo {
     pub image: String,
     pub status: String,
     pub created: i64,
-    pub ports: Vec<String>,
-    pub networks: Vec<String>,
+    pub ports: Vec<PortInfo>,
+    /// Map of network name to attachment details.
+    pub networks: HashMap<String, ContainerNetworkInfo>,
+}
+
+/// A Docker network with its configuration and member containers.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NetworkInfo {
+    pub id: String,
+    pub name: String,
+    pub driver: String,
+    pub scope: String,
+    /// Primary subnet CIDR, if configured.
+    pub subnet: Option<String>,
+    /// Whether the network is internal-only.
+    pub internal: bool,
+    /// IDs of containers attached to this network.
+    ///
+    /// Note: `list_networks()` does not populate this field because Docker's
+    /// `/networks` endpoint requires `verbose=true` to return container
+    /// memberships. In v0.1, the topology endpoint derives edges from
+    /// container-side network data instead.
+    pub containers: Vec<String>,
 }

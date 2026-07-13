@@ -36,8 +36,9 @@ fn load_with_valid_config_file_returns_config_object() {
     assert_eq!(config.docker_socket_path, "/var/run/docker.sock");
     assert_eq!(config.logging_level, "info");
     assert_eq!(config.frontend_theme, "light");
-    assert_eq!(config.auth.username, "admin");
-    assert!(config.auth.password_hash.is_none());
+    assert_eq!(config.auth.as_ref().unwrap().username, "admin");
+    assert!(config.auth.as_ref().unwrap().password_hash.is_none());
+    assert!(!config.demo_mode);
 }
 
 #[test_log::test]
@@ -127,8 +128,8 @@ fn with_defaults_when_called_returns_default_config() {
     assert_eq!(config.docker_socket_path, "/var/run/docker.sock");
     assert_eq!(config.logging_level, "info");
     assert_eq!(config.frontend_theme, "light");
-    assert_eq!(config.auth.username, "admin");
-    assert!(config.auth.password_hash.is_none());
+    assert!(config.auth.is_none());
+    assert!(!config.demo_mode);
     
     // Validate that default config passes validation
     assert!(config.validate().is_ok());
