@@ -64,10 +64,10 @@ async fn list_running_containers_with_multiple_testcontainers_returns_multiple_c
     use testcontainers::{GenericImage, runners::AsyncRunner};
 
     let nginx_image = GenericImage::new("nginx", "alpine");
-    let alpine_image = GenericImage::new("alpine", "latest");
+    let nginx2_image = GenericImage::new("nginx", "alpine");
 
     let _nginx_container = nginx_image.start().await;
-    let _alpine_container = alpine_image.start().await;
+    let _nginx2_container = nginx2_image.start().await;
 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
@@ -76,8 +76,8 @@ async fn list_running_containers_with_multiple_testcontainers_returns_multiple_c
     let containers = client.list_running_containers().await?;
 
     assert!(
-        containers.len() >= 1,
-        "Expected at least one running container, found {}",
+        containers.len() >= 2,
+        "Expected at least two running containers, found {}",
         containers.len()
     );
 
