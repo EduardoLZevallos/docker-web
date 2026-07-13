@@ -162,6 +162,22 @@ async fn get_containers_with_test_container_returns_container_list() {
     assert!(json.is_array());
     let containers = json.as_array().unwrap();
     assert!(!containers.is_empty(), "Expected at least one container");
+
+    let nginx = &containers[0];
+    assert!(!nginx["id"].as_str().unwrap().is_empty());
+    assert!(!nginx["name"].as_str().unwrap().is_empty());
+
+    let ports = nginx["ports"].as_array().unwrap();
+    assert!(!ports.is_empty(), "Expected at least one port");
+    let port = &ports[0];
+    assert!(port["private"].is_number());
+    assert!(port["protocol"].is_string());
+
+    let networks = nginx["networks"].as_object().unwrap();
+    assert!(!networks.is_empty(), "Expected at least one network");
+    let (_, net_info) = networks.iter().next().unwrap();
+    assert!(net_info["ip_address"].is_string());
+    assert!(net_info["mac_address"].is_string());
 }
 
 #[tokio::test]
@@ -199,6 +215,10 @@ async fn get_networks_with_custom_network_returns_network_list() {
     assert_eq!(custom_network["name"], network_name);
     assert_eq!(custom_network["driver"], "bridge");
     assert_eq!(custom_network["scope"], "local");
+    assert!(
+        custom_network["subnet"].is_string(),
+        "Expected subnet to be populated"
+    );
 
     guard.defuse();
     remove_test_network(&docker, &network_name).await;
@@ -306,4 +326,74 @@ async fn get_topology_with_custom_network_and_container_returns_combined_data() 
 
     guard.defuse();
     remove_test_network(&docker, &network_name).await;
+}
+
+#[tokio::test]
+async fn get_config_with_demo_mode_true_returns_demo_mode_enabled() {
+    let mut config = Config::with_defaults();
+    config.demo_mode = true;
+    config.frontend_theme = String::from("dark");
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(config))
+            .service(
+                web::scope("/api")
+                    .route("/config", web::get().to(api::get_config))
+            )
+    ).await;
+
+    let req = test::TestRequest::get()
+        .uri("/api/config")
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+
+    assert!(resp.status().is_success());
+
+    let body = test::read_body(resp).await;
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["demo_mode"], true);
+    assert_eq!(json["theme"], "dark");
+}
+
+#[tokio::test]
+async fn get_containers_with_broken_docker_socket_returns_503() {
+    let mut config = Config::with_defaults();
+    config.docker_socket_path = "/tmp/nonexistent_docker_test.sock".to_string();
+
+    let docker_client = match DockerClient::new(&config) {
+        Ok(client) => client,
+        Err(e) => {
+            log::warn!(
+                "DockerClient creation failed (expected on some platforms): {}",
+                e
+            );
+            return;
+        }
+    };
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(docker_client))
+            .service(
+                web::scope("/api")
+                    .route("/containers", web::get().to(api::get_containers))
+            )
+    ).await;
+
+    let req = test::TestRequest::get()
+        .uri("/api/containers")
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(
+        resp.status(),
+        actix_web::http::StatusCode::SERVICE_UNAVAILABLE,
+        "Expected 503 when Docker is unreachable"
+    );
+
+    let body = test::read_body(resp).await;
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "Docker connection failed");
 }
