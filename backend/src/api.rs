@@ -42,6 +42,10 @@ fn docker_error_response(err: &DockerError) -> HttpResponse {
     HttpResponse::build(status).json(error_resp)
 }
 
+/// Health check endpoint.
+///
+/// Returns service status and Docker reachability. Docker connectivity is
+/// tested with a 5-second timeout to avoid blocking.
 pub async fn health(docker_client: web::Data<DockerClient>) -> ActixResult<HttpResponse> {
     let docker_reachable = tokio::time::timeout(Duration::from_secs(5), docker_client.ping())
         .await
@@ -59,6 +63,7 @@ pub async fn health(docker_client: web::Data<DockerClient>) -> ActixResult<HttpR
     Ok(HttpResponse::Ok().json(health_resp))
 }
 
+/// List all running Docker containers.
 pub async fn get_containers(
     docker_client: web::Data<DockerClient>,
 ) -> ActixResult<HttpResponse> {
@@ -74,6 +79,7 @@ pub async fn get_containers(
     }
 }
 
+/// List all Docker networks.
 pub async fn get_networks(
     docker_client: web::Data<DockerClient>,
 ) -> ActixResult<HttpResponse> {
@@ -89,6 +95,10 @@ pub async fn get_networks(
     }
 }
 
+/// Combined container and network topology with edges.
+///
+/// Fetches running containers and networks concurrently, then builds edges
+/// by matching container-side network memberships to network IDs.
 pub async fn get_network_topology(
     docker_client: web::Data<DockerClient>,
 ) -> ActixResult<HttpResponse> {
@@ -142,6 +152,10 @@ pub async fn get_network_topology(
     }
 }
 
+/// Runtime frontend configuration.
+///
+/// Returns `demo_mode` and `theme` so the frontend can decide whether to
+/// use mock data and which color scheme to apply.
 pub async fn get_config(config: web::Data<Config>) -> ActixResult<HttpResponse> {
     let config_resp = serde_json::json!({
         "demo_mode": config.demo_mode,
@@ -151,6 +165,7 @@ pub async fn get_config(config: web::Data<Config>) -> ActixResult<HttpResponse> 
     Ok(HttpResponse::Ok().json(config_resp))
 }
 
+/// Register all API routes under the given service config scope.
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.route("/health", web::get().to(health))
         .route("/config", web::get().to(get_config))
