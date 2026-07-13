@@ -48,20 +48,30 @@ async fn remove_test_network(docker: &Docker, name: &str) {
 
 struct NetworkGuard {
     name: String,
+    cleaned: bool,
 }
 
 impl NetworkGuard {
     fn new(name: String) -> Self {
-        NetworkGuard { name }
+        NetworkGuard {
+            name,
+            cleaned: false,
+        }
+    }
+
+    fn defuse(&mut self) {
+        self.cleaned = true;
     }
 }
 
 impl Drop for NetworkGuard {
     fn drop(&mut self) {
-        log::warn!(
-            "Test network '{}' was not explicitly cleaned up — may have leaked",
-            self.name
-        );
+        if !self.cleaned {
+            log::warn!(
+                "Test network '{}' was not explicitly cleaned up — may have leaked",
+                self.name
+            );
+        }
     }
 }
 
@@ -158,7 +168,7 @@ async fn get_containers_with_test_container_returns_container_list() {
 async fn get_networks_with_custom_network_returns_network_list() {
     let docker = Docker::connect_with_socket_defaults().unwrap();
     let (network_name, _network_id) = create_test_network(&docker, "test_net_api").await;
-    let _guard = NetworkGuard::new(network_name.clone());
+    let mut guard = NetworkGuard::new(network_name.clone());
 
     let docker_client = create_test_docker_client();
     let app = test::init_service(
@@ -190,6 +200,7 @@ async fn get_networks_with_custom_network_returns_network_list() {
     assert_eq!(custom_network["driver"], "bridge");
     assert_eq!(custom_network["scope"], "local");
 
+    guard.defuse();
     remove_test_network(&docker, &network_name).await;
 }
 
@@ -200,7 +211,7 @@ async fn get_topology_with_custom_network_and_container_returns_combined_data() 
     let docker = Docker::connect_with_socket_defaults().unwrap();
 
     let (network_name, network_id) = create_test_network(&docker, "test_topo").await;
-    let _guard = NetworkGuard::new(network_name.clone());
+    let mut guard = NetworkGuard::new(network_name.clone());
 
     let nginx_image = GenericImage::new("nginx", "latest")
         .with_wait_for(WaitFor::seconds(3));
@@ -293,5 +304,6 @@ async fn get_topology_with_custom_network_and_container_returns_combined_data() 
         edges.len()
     );
 
+    guard.defuse();
     remove_test_network(&docker, &network_name).await;
 }

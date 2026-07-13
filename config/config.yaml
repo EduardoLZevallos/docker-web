@@ -18,8 +18,3 @@ metrics_log_file_path: "/var/log/docker-web-metrics.log"
 # Frontend settings
 frontend_theme: "light"
 demo_mode: false
-
-# Authentication settings
-auth:
-  username: "admin"
-  password_hash: ~

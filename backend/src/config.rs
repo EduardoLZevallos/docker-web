@@ -6,6 +6,9 @@ use std::fs;
 use std::str::FromStr;
 use log::{debug, info, error};
 
+// TODO(v0.2): Add reverse_proxy_url field as an alternative to docker_socket_path
+// for connecting to Docker via an HTTP reverse proxy instead of a Unix socket.
+
 #[derive(Error, Debug)]
 pub enum ConfigError {
     #[error("Failed to read configuration file: {0}")]
@@ -37,8 +40,6 @@ pub struct Config {
     #[validate(custom = "validate_bind_address")]
     pub bind_address: String,
 
-    pub reverse_proxy_url: Option<String>,
-
     #[validate(custom = "validate_log_level")]
     pub logging_level: String,
 
@@ -54,8 +55,9 @@ pub struct Config {
     #[serde(default)]
     pub demo_mode: bool,
 
+    #[serde(default)]
     #[validate]
-    pub auth: Auth,
+    pub auth: Option<Auth>,
 }
 
 fn validate_socket_path(path: &str) -> Result<(), ValidationError> {
@@ -157,16 +159,12 @@ impl Config {
                 .and_then(|t| t.parse().ok())
                 .unwrap_or(120),
             bind_address: std::env::var("BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0:3000".to_string()),
-            reverse_proxy_url: None,
             logging_level: String::from("info"),
             log_file_path: String::from("/var/log/docker-web.log"),
             metrics_log_file_path: String::from("/var/log/docker-web-metrics.log"),
             frontend_theme: String::from("light"),
             demo_mode: false,
-            auth: Auth {
-                username: String::from("admin"),
-                password_hash: None,
-            },
+            auth: None,
         }
     }
 }
