@@ -98,30 +98,16 @@ async fn list_running_containers_with_multiple_testcontainers_returns_multiple_c
 }
 
 #[test_log::test(tokio::test)]
-async fn list_networks_with_running_container_finds_networks_with_containers(
-) -> Result<(), DockerError> {
-    use testcontainers::{GenericImage, runners::AsyncRunner};
-
-    let nginx_image = GenericImage::new("nginx", "alpine");
-    let _container = nginx_image.start().await;
-
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
+async fn list_networks_returns_default_docker_networks() -> Result<(), DockerError> {
     let client = create_test_docker_client()?;
 
     let networks = client.list_networks().await?;
 
     assert!(!networks.is_empty(), "Should have at least default networks");
 
-    let networks_with_containers: Vec<_> = networks
-        .iter()
-        .filter(|n| !n.containers.is_empty())
-        .collect();
-
-    log::debug!(
-        "Found {} networks with containers attached",
-        networks_with_containers.len()
-    );
+    let bridge = networks.iter().find(|n| n.name == "bridge");
+    assert!(bridge.is_some(), "Expected 'bridge' network to exist");
+    assert_eq!(bridge.unwrap().driver, "bridge");
 
     Ok(())
 }

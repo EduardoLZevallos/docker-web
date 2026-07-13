@@ -179,5 +179,10 @@ pub struct NetworkInfo {
     /// Whether the network is internal-only.
     pub internal: bool,
     /// IDs of containers attached to this network.
+    ///
+    /// Note: `list_networks()` does not populate this field because Docker's
+    /// `/networks` endpoint requires `verbose=true` to return container
+    /// memberships. In v0.1, the topology endpoint derives edges from
+    /// container-side network data instead.
     pub containers: Vec<String>,
 }

@@ -20,7 +20,6 @@ log = "0.4"        # Logging interface
 env_logger = "0.10"  # Logging implementation
 bollard = "0.16"   # Docker API client
 tokio = { version = "1.32", features = ["full"] }  # Async runtime for bollard
-futures-util = "0.3"  # Utilities for working with futures
 actix-web = "4.4"  # Web framework for REST API
 serde_json = "1.0"  # JSON serialization
 dotenvy = "0.15.7"

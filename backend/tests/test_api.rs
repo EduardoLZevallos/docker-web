@@ -46,14 +46,14 @@ async fn remove_test_network(docker: &Docker, name: &str) {
     }
 }
 
-struct NetworkGuard {
+struct LeakWarning {
     name: String,
     cleaned: bool,
 }
 
-impl NetworkGuard {
+impl LeakWarning {
     fn new(name: String) -> Self {
-        NetworkGuard {
+        LeakWarning {
             name,
             cleaned: false,
         }
@@ -64,7 +64,7 @@ impl NetworkGuard {
     }
 }
 
-impl Drop for NetworkGuard {
+impl Drop for LeakWarning {
     fn drop(&mut self) {
         if !self.cleaned {
             log::warn!(
@@ -163,7 +163,10 @@ async fn get_containers_with_test_container_returns_container_list() {
     let containers = json.as_array().unwrap();
     assert!(!containers.is_empty(), "Expected at least one container");
 
-    let nginx = &containers[0];
+    let nginx = containers
+        .iter()
+        .find(|c| c["image"].as_str().unwrap_or("").contains("nginx"))
+        .expect("Should find nginx container");
     assert!(!nginx["id"].as_str().unwrap().is_empty());
     assert!(!nginx["name"].as_str().unwrap().is_empty());
 
@@ -184,7 +187,7 @@ async fn get_containers_with_test_container_returns_container_list() {
 async fn get_networks_with_custom_network_returns_network_list() {
     let docker = Docker::connect_with_socket_defaults().unwrap();
     let (network_name, _network_id) = create_test_network(&docker, "test_net_api").await;
-    let mut guard = NetworkGuard::new(network_name.clone());
+    let mut guard = LeakWarning::new(network_name.clone());
 
     let docker_client = create_test_docker_client();
     let app = test::init_service(
@@ -231,7 +234,7 @@ async fn get_topology_with_custom_network_and_container_returns_combined_data() 
     let docker = Docker::connect_with_socket_defaults().unwrap();
 
     let (network_name, network_id) = create_test_network(&docker, "test_topo").await;
-    let mut guard = NetworkGuard::new(network_name.clone());
+    let mut guard = LeakWarning::new(network_name.clone());
 
     let nginx_image = GenericImage::new("nginx", "latest")
         .with_wait_for(WaitFor::seconds(3));
@@ -364,8 +367,9 @@ async fn get_containers_with_broken_docker_socket_returns_503() {
     let docker_client = match DockerClient::new(&config) {
         Ok(client) => client,
         Err(e) => {
-            log::warn!(
-                "DockerClient creation failed (expected on some platforms): {}",
+            assert!(
+                matches!(e, docker_web::docker::DockerError::ConnectionError(_)),
+                "Expected ConnectionError when socket is broken, got: {:?}",
                 e
             );
             return;
