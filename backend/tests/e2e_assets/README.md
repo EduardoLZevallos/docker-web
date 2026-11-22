@@ -11,11 +11,12 @@ cargo test --manifest-path backend/Cargo.toml --test backend_e2e -- --test-threa
 
 Validated on 2026-11-22 on branch `test/backend-e2e-contract` (uncommitted):
 
-- Result: **29 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out** in
-  357.33 s. Exit code 101 is expected because of the six contract failures below.
+- Result: **33 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out** in
+  219.07 s (39 tests). Exit code 101 is expected because of the six contract
+  failures below.
 - No harness, setup, outage/recovery, concurrency, or cleanup test failed.
-- The validation log is preserved at `/tmp/opencode/backend_e2e_full.log` (not
-  committed).
+- The validation log is preserved at `/tmp/opencode/backend_e2e_review_final.log`
+  (not committed).
 
 ## Prerequisites
 
@@ -38,19 +39,22 @@ Validated on 2026-11-22 on branch `test/backend-e2e-contract` (uncommitted):
 
 Each test starts one privileged DinD container (`docker:26.1.4-dind`) and one
 sibling backend container on the outer daemon. Both are named with
-`docker-web-e2e-*` and owned by the test. The inner daemon uses a per-scenario
-data root; the runner and backend share only a private bind-mounted Unix-socket
-directory (`/e2e/docker.sock`). No Docker TCP listener is exposed. The backend is
-built from [`Dockerfile`](Dockerfile) against the current production source and
-receives [`config.yaml`](config.yaml) at `/app/config/config.yaml`; tests use
-real HTTP against that binary. Inner fixture containers and networks carry a
-run-ID label.
+`docker-web-e2e-*` and owned by the test. The inner daemon uses a fresh labeled
+named volume for `/var/lib/docker`; the runner and backend share only a private
+bind-mounted Unix-socket directory (`/e2e/docker.sock`). No Docker TCP listener
+is exposed. The backend image is built once per suite invocation from
+[`Dockerfile`](Dockerfile) against the current production source and receives
+[`config.yaml`](config.yaml) at `/app/config/config.yaml`; tests use real HTTP
+against that binary. Inner fixture containers and networks carry a run-ID label.
 
-Cleanup runs after normal return, body panic, diagnostics failure, or
-deterministic partial-startup failure. It removes labeled inner
-containers/networks, the backend and DinD containers, the test image, socket, and
-temporary config, then verifies the owned containers are gone. Cleanup errors
-fail the test.
+Cleanup runs after normal return, body panic, diagnostics failure, a real
+startup panic, or deterministic startup-failure injection. It removes labeled
+inner containers/networks, the backend and DinD containers, the named DinD data
+volume, socket, and temporary config, then verifies the owned containers and
+volume are gone. Cleanup errors fail the test. A startup guard removes owned
+containers and the data volume even when Testcontainers panics before a harness
+exists. The shared backend image is removed by a detached janitor after the test
+process exits, so scenarios reuse it without leaving an image behind.
 
 Legacy integration targets use the host Docker daemon and are outside this
 command.
@@ -76,8 +80,25 @@ exit codes, but the visibility assertion fails first. These are contract
 failures, not harness failures: the fixtures exist in the inner daemon and the
 other scenarios in the same serial run pass.
 
+## Additional contract coverage
+
+- The topology size matrix runs against `/api/containers`, `/api/networks`, and
+  `/api/topology`, checking stable-state cross-endpoint consistency.
+- Concurrent readers require HTTP 200 throughout ordinary mutations, pre-register
+  transient fixture identity behind a reader gate, and wait for observation
+  acknowledgements instead of fixed sleeps. Daemon-outage 503s stay confined to
+  the recovery scenario.
+- Restarting containers are checked through both `/api/containers` and
+  `/api/topology`, including the preserved network attachment edge.
+- An unresponsive-but-connected daemon is simulated by pausing only the isolated
+  DinD container; health and discovery responses must stay bounded, and recovery
+  must not restart the backend.
+- Real startup failures cover a missing Dockerfile build, an invalid backend
+  config that exits the binary, and a missing backend image that makes
+  Testcontainers panic. Each must leave no owned container or data volume.
+
 Interpret any other failure as a regression or harness/setup problem. The
-expected full-target outcome is exactly 29 passed and those six failures (exit
+expected full-target outcome is exactly 33 passed and those six failures (exit
 code 101). A focused rerun, for example, is:
 
 ```sh

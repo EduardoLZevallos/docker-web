@@ -5,7 +5,8 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     path::{Path, PathBuf},
     pin::Pin,
-    process::Command,
+    process::{Command, Stdio},
+    sync::OnceLock,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -14,6 +15,7 @@ use bollard::{
     container::{ListContainersOptions, LogsOptions, RemoveContainerOptions, StopContainerOptions},
     models::ContainerStateStatusEnum,
     network::ListNetworksOptions,
+    volume::{CreateVolumeOptions, ListVolumesOptions, RemoveVolumeOptions},
 };
 use futures_util::{FutureExt, TryStreamExt};
 use reqwest::StatusCode;
@@ -26,6 +28,7 @@ use testcontainers::{
 };
 use tokio::{process::Command as TokioCommand, time::Instant};
 
+pub mod fixtures;
 pub mod lifecycle;
 pub mod resilience;
 pub mod topology;
@@ -53,6 +56,12 @@ pub enum StartupFault {
     AfterDindReady,
     /// Fail after the sibling backend container starts but before HTTP readiness succeeds.
     AfterBackendStarted,
+    /// Make the real backend image build fail by using a missing Dockerfile.
+    ImageBuildFailure,
+    /// Start the backend with an invalid config so the binary exits during startup.
+    InvalidBackendConfig,
+    /// Start the backend with a missing image so Testcontainers panics during creation.
+    MissingBackendImage,
 }
 
 impl StartupFault {
@@ -63,8 +72,18 @@ impl StartupFault {
             Self::AfterBackendStarted => {
                 Some("injected startup fault after backend start before HTTP readiness")
             }
+            Self::ImageBuildFailure => None,
+            Self::InvalidBackendConfig => None,
+            Self::MissingBackendImage => None,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct CleanupProof {
+    pub containers: Vec<String>,
+    pub image_tag: String,
+    pub volume_name: String,
 }
 
 pub struct E2eHarness {
@@ -72,6 +91,7 @@ pub struct E2eHarness {
     pub http: reqwest::Client,
     pub base_url: String,
     pub run_id: String,
+    dind_volume_name: String,
     socket_dir: TempDir,
     _config_dir: TempDir,
     dind: Option<ContainerAsync<GenericImage>>,
@@ -133,9 +153,23 @@ impl E2eHarness {
     }
 
     async fn start(fault: StartupFault) -> Result<Self, String> {
+        match AssertUnwindSafe(Self::start_inner(fault))
+            .catch_unwind()
+            .await
+        {
+            Ok(result) => result,
+            Err(payload) => Err(format!(
+                "E2E startup panicked: {}",
+                panic_message(payload.as_ref())
+            )),
+        }
+    }
+
+    async fn start_inner(fault: StartupFault) -> Result<Self, String> {
         let run_id = unique_run_id();
         let root = workspace_root();
-        let backend_image_tag = format!("docker-web-e2e:{run_id}");
+        let dind_volume_name = format!("docker-web-e2e-dind-data-{run_id}");
+        let backend_image_tag = suite_image_tag();
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()
@@ -156,6 +190,15 @@ impl E2eHarness {
             .ping()
             .await
             .map_err(|e| format!("outer Docker unavailable: {e}"))?;
+        outer_docker
+            .create_volume(CreateVolumeOptions {
+                name: dind_volume_name.clone(),
+                labels: HashMap::from([(RUN_LABEL.to_owned(), run_id.clone())]),
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| format!("create DinD data volume {dind_volume_name}: {e}"))?;
+        let mut startup_guard = StartupGuard::new(run_id.clone(), dind_volume_name.clone());
 
         let dind_script = root.join("backend/tests/e2e_assets/dind-entrypoint.sh");
         let dind_image = GenericImage::new("docker", "26.1.4-dind")
@@ -163,6 +206,10 @@ impl E2eHarness {
             .with_mount(Mount::bind_mount(
                 dind_script.to_string_lossy().into_owned(),
                 "/e2e-entrypoint.sh",
+            ))
+            .with_mount(Mount::volume_mount(
+                dind_volume_name.clone(),
+                "/var/lib/docker",
             ));
         let dind = RunnableImage::from(dind_image)
             .with_container_name(format!("docker-web-e2e-dind-{run_id}"))
@@ -199,6 +246,7 @@ impl E2eHarness {
             http,
             base_url: String::new(),
             run_id,
+            dind_volume_name,
             socket_dir,
             _config_dir: config_dir,
             dind: Some(dind),
@@ -218,10 +266,34 @@ impl E2eHarness {
             )
             .await;
         }
-        if let Err(error) = build_backend_image(&root, &harness.backend_image_tag).await {
+        if fault == StartupFault::ImageBuildFailure {
+            let missing = root.join("backend/tests/e2e_assets/missing-Dockerfile");
+            let error = build_backend_image(&root, &harness.backend_image_tag, &missing)
+                .await
+                .expect_err("missing Dockerfile must fail the image build");
             return Self::fail_startup(harness, error).await;
         }
-        let backend_image = GenericImage::new("docker-web-e2e", harness.run_id.as_str())
+        if let Err(error) = ensure_suite_image(&root).await {
+            return Self::fail_startup(harness, error).await;
+        }
+        if fault == StartupFault::InvalidBackendConfig {
+            std::fs::write(
+                harness._config_dir.path().join("config.yaml"),
+                "discovery_interval: [invalid\n",
+            )
+            .map_err(|error| format!("write invalid test config: {error}"))?;
+        }
+
+        let (repo, tag) = harness
+            .backend_image_tag
+            .rsplit_once(':')
+            .expect("suite image tag contains a colon");
+        let (backend_repo, backend_tag) = if fault == StartupFault::MissingBackendImage {
+            ("docker-web-e2e", format!("missing-{}", harness.run_id))
+        } else {
+            (repo, tag.to_owned())
+        };
+        let backend_image = GenericImage::new(backend_repo, &backend_tag)
             .with_exposed_port(3000)
             .with_env_var("DOCKER_SOCKET_PATH", SOCKET_PATH)
             .with_env_var("BIND_ADDRESS", "0.0.0.0:3000")
@@ -239,7 +311,23 @@ impl E2eHarness {
             .start()
             .await;
 
-        let port = backend.get_host_port_ipv4(3000).await;
+        let port = match AssertUnwindSafe(backend.get_host_port_ipv4(3000))
+            .catch_unwind()
+            .await
+        {
+            Ok(port) => port,
+            Err(payload) => {
+                harness.backend = Some(backend);
+                return Self::fail_startup(
+                    harness,
+                    format!(
+                        "backend did not expose port 3000 during startup: {}",
+                        panic_message(payload.as_ref())
+                    ),
+                )
+                .await;
+            }
+        };
         let host = backend.get_host().await;
         harness.base_url = format!("http://{host}:{port}");
         harness.backend = Some(backend);
@@ -257,6 +345,7 @@ impl E2eHarness {
         if let Err(error) = harness.wait_for_http_health(CONVERGENCE_TIMEOUT).await {
             return Self::fail_startup(harness, error).await;
         }
+        startup_guard.disarm();
         Ok(harness)
     }
 
@@ -313,6 +402,38 @@ impl E2eHarness {
         self.socket_dir.path().join("docker.sock")
     }
 
+    pub async fn pause_dind(&self) {
+        let dind = self.dind.as_ref().expect("DinD fixture exists");
+        self.outer_docker
+            .pause_container(dind.id())
+            .await
+            .expect("pause the isolated DinD container");
+        let state = self
+            .outer_docker
+            .inspect_container(dind.id(), None)
+            .await
+            .expect("inspect paused DinD container")
+            .state
+            .unwrap_or_default();
+        assert_eq!(state.paused, Some(true), "DinD must be paused");
+    }
+
+    pub async fn unpause_dind(&self) {
+        let dind = self.dind.as_ref().expect("DinD fixture exists");
+        self.outer_docker
+            .unpause_container(dind.id())
+            .await
+            .expect("unpause the isolated DinD container");
+        let state = self
+            .outer_docker
+            .inspect_container(dind.id(), None)
+            .await
+            .expect("inspect unpaused DinD container")
+            .state
+            .unwrap_or_default();
+        assert_ne!(state.paused, Some(true), "DinD must be unpaused");
+    }
+
     pub async fn stop_dind(&self) {
         let dind = self.dind.as_ref().expect("DinD fixture exists");
         if let Err(error) = self
@@ -355,8 +476,13 @@ impl E2eHarness {
         }
         let deadline = Instant::now() + RECOVERY_TIMEOUT;
         loop {
-            match self.outer_docker.inspect_container(dind.id(), None).await {
-                Ok(info) => {
+            let inspection = tokio::time::timeout_at(
+                deadline,
+                self.outer_docker.inspect_container(dind.id(), None),
+            )
+            .await;
+            match inspection {
+                Ok(Ok(info)) => {
                     let state = info.state.unwrap_or_default();
                     if matches!(
                         state.status,
@@ -369,14 +495,29 @@ impl E2eHarness {
                             state.status, state.exit_code, state.error
                         );
                     }
-                    if state.running == Some(true) && self.docker.ping().await.is_ok() {
-                        return;
+                    if state.running == Some(true) {
+                        match tokio::time::timeout_at(deadline, self.docker.ping()).await {
+                            Ok(Ok(_)) => return,
+                            Ok(Err(_)) => {}
+                            Err(_) => {
+                                self.print_dind_failure("did not recover inner Docker", dind.id())
+                                    .await;
+                                panic!(
+                                    "inner Docker daemon did not answer within {RECOVERY_TIMEOUT:?} after DinD restart"
+                                );
+                            }
+                        }
                     }
                 }
-                Err(error) => {
+                Ok(Err(error)) => {
                     self.print_dind_failure("inspect after restart failed", dind.id())
                         .await;
                     panic!("inspect restarted DinD container: {error}");
+                }
+                Err(_) => {
+                    self.print_dind_failure("recovery deadline exceeded", dind.id())
+                        .await;
+                    panic!("DinD recovery exceeded {RECOVERY_TIMEOUT:?} after restart");
                 }
             }
             if Instant::now() >= deadline {
@@ -427,19 +568,40 @@ impl E2eHarness {
         (backend.id().to_owned(), started)
     }
 
-    pub fn cleanup_proof(&self) -> (Vec<String>, String) {
-        let ids = self
-            .backend
-            .iter()
-            .chain(self.dind.iter())
-            .map(|container| container.id().to_owned())
-            .collect();
-        (ids, self.backend_image_tag.clone())
+    pub fn cleanup_proof(&self) -> CleanupProof {
+        CleanupProof {
+            containers: self
+                .backend
+                .iter()
+                .chain(self.dind.iter())
+                .map(|container| container.id().to_owned())
+                .collect(),
+            image_tag: self.backend_image_tag.clone(),
+            volume_name: self.dind_volume_name.clone(),
+        }
     }
 
     async fn wait_for_http_health(&self, timeout: Duration) -> Result<(), String> {
         let deadline = Instant::now() + timeout;
         loop {
+            if let Some(backend) = &self.backend {
+                if let Ok(info) = self
+                    .outer_docker
+                    .inspect_container(backend.id(), None)
+                    .await
+                {
+                    let state = info.state.unwrap_or_default();
+                    if matches!(
+                        state.status,
+                        Some(ContainerStateStatusEnum::EXITED | ContainerStateStatusEnum::DEAD)
+                    ) {
+                        return Err(format!(
+                            "backend exited during startup: status={:?} exit_code={:?} error={:?}",
+                            state.status, state.exit_code, state.error
+                        ));
+                    }
+                }
+            }
             if let Ok(response) = self
                 .http
                 .get(format!("{}/api/health", self.base_url))
@@ -465,6 +627,15 @@ impl E2eHarness {
 
     async fn cleanup_inner(&mut self) -> Result<(), String> {
         let mut errors = Vec::new();
+        if let Some(dind) = &self.dind {
+            if let Ok(info) = self.outer_docker.inspect_container(dind.id(), None).await {
+                if info.state.and_then(|state| state.paused) == Some(true) {
+                    if let Err(error) = self.outer_docker.unpause_container(dind.id()).await {
+                        errors.push(format!("unpause DinD before cleanup: {error}"));
+                    }
+                }
+            }
+        }
         if self.docker.ping().await.is_err() {
             eprintln!(
                 "E2E cleanup: inner Docker is unavailable; removing the containing DinD fixture also removes its private engine state"
@@ -590,43 +761,46 @@ impl E2eHarness {
                 }
             }
         }
+        if let Err(error) = self
+            .outer_docker
+            .remove_volume(
+                &self.dind_volume_name,
+                Some(RemoveVolumeOptions { force: true }),
+            )
+            .await
+        {
+            if !is_not_found(&error) {
+                errors.push(format!(
+                    "remove DinD data volume {}: {error}",
+                    self.dind_volume_name
+                ));
+            }
+        }
+        match self
+            .outer_docker
+            .list_volumes(Some(ListVolumesOptions::<String> {
+                filters: HashMap::from([(
+                    String::from("label"),
+                    vec![format!("{RUN_LABEL}={}", self.run_id)],
+                )]),
+                ..Default::default()
+            }))
+            .await
+        {
+            Ok(volumes) => {
+                let remaining = volumes.volumes.unwrap_or_default();
+                if !remaining.is_empty() {
+                    errors.push(format!(
+                        "{} labeled DinD data volume(s) remain",
+                        remaining.len()
+                    ));
+                }
+            }
+            Err(error) => errors.push(format!("verify DinD data volume cleanup: {error}")),
+        }
         if let Err(error) = std::fs::remove_file(self.inner_socket_path()) {
             if error.kind() != std::io::ErrorKind::NotFound {
                 errors.push(format!("remove shared socket: {error}"));
-            }
-        }
-        let image_exists = match self
-            .outer_docker
-            .inspect_image(&self.backend_image_tag)
-            .await
-        {
-            Ok(_) => true,
-            Err(bollard::errors::Error::DockerResponseServerError {
-                status_code: 404, ..
-            }) => false,
-            Err(error) => {
-                errors.push(format!(
-                    "inspect test image {} before removal: {error}",
-                    self.backend_image_tag
-                ));
-                false
-            }
-        };
-        if image_exists {
-            match Command::new("docker")
-                .args(["image", "rm", &self.backend_image_tag])
-                .output()
-            {
-                Ok(output) if output.status.success() => {}
-                Ok(output) => errors.push(format!(
-                    "remove test image {}: {}",
-                    self.backend_image_tag,
-                    String::from_utf8_lossy(&output.stderr)
-                )),
-                Err(error) => errors.push(format!(
-                    "remove test image {}: {error}",
-                    self.backend_image_tag
-                )),
             }
         }
         if errors.is_empty() {
@@ -728,6 +902,99 @@ impl E2eHarness {
     }
 }
 
+/// Removes partly-created suite resources if startup panics before an
+/// `E2eHarness` exists to run the normal cleanup path.
+struct StartupGuard {
+    run_id: String,
+    volume_name: String,
+    armed: bool,
+}
+
+impl StartupGuard {
+    fn new(run_id: String, volume_name: String) -> Self {
+        Self {
+            run_id,
+            volume_name,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StartupGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        for name in [
+            format!("docker-web-e2e-backend-{}", self.run_id),
+            format!("docker-web-e2e-dind-{}", self.run_id),
+        ] {
+            let _ = Command::new("docker")
+                .args(["unpause", &name])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let _ = Command::new("docker")
+                .args(["rm", "-f", "-v", &name])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+        let _ = Command::new("docker")
+            .args(["volume", "rm", "-f", &self.volume_name])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+static SUITE_IMAGE_TAG: OnceLock<String> = OnceLock::new();
+static SUITE_IMAGE_BUILD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+fn suite_image_tag() -> String {
+    format!("docker-web-e2e:suite-{}", std::process::id())
+}
+
+async fn ensure_suite_image(root: &Path) -> Result<String, String> {
+    if let Some(tag) = SUITE_IMAGE_TAG.get() {
+        return Ok(tag.clone());
+    }
+    let build_lock = SUITE_IMAGE_BUILD.get_or_init(|| tokio::sync::Mutex::new(()));
+    let _guard = build_lock.lock().await;
+    if let Some(tag) = SUITE_IMAGE_TAG.get() {
+        return Ok(tag.clone());
+    }
+    let tag = suite_image_tag();
+    let dockerfile = root.join("backend/tests/e2e_assets/Dockerfile");
+    build_backend_image(root, &tag, &dockerfile).await?;
+    spawn_image_janitor(&tag);
+    let _ = SUITE_IMAGE_TAG.set(tag.clone());
+    Ok(tag)
+}
+
+/// The shared backend image is removed by a detached janitor after this test
+/// process exits, so repeated scenarios do not rebuild it and the suite leaves
+/// no owned image behind.
+fn spawn_image_janitor(tag: &str) {
+    let pid = std::process::id();
+    let script = format!(
+        "while kill -0 {pid} 2>/dev/null; do sleep 1; done; docker image rm {tag} >/dev/null 2>&1 || true"
+    );
+    let _ = Command::new("sh")
+        .args(["-c", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
 async fn wait_for_inner_docker(
     socket_path: &Path,
     timeout: Duration,
@@ -779,7 +1046,7 @@ async fn wait_for_inner_docker(
     }
 }
 
-async fn build_backend_image(root: &Path, tag: &str) -> Result<(), String> {
+async fn build_backend_image(root: &Path, tag: &str, dockerfile: &Path) -> Result<(), String> {
     let context = tempfile::tempdir().map_err(|e| format!("create backend build context: {e}"))?;
     let backend_dir = context.path().join("backend");
     std::fs::create_dir(&backend_dir)
@@ -795,7 +1062,6 @@ async fn build_backend_image(root: &Path, tag: &str) -> Result<(), String> {
     )
     .map_err(|e| format!("copy backend lockfile into build context: {e}"))?;
     copy_tree(&root.join("backend/src"), &backend_dir.join("src"))?;
-    let dockerfile = root.join("backend/tests/e2e_assets/Dockerfile");
     let output = tokio::time::timeout(Duration::from_secs(300), async {
         TokioCommand::new("docker")
             .kill_on_drop(true)
@@ -817,6 +1083,16 @@ async fn build_backend_image(root: &Path, tag: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn is_not_found(error: &bollard::errors::Error) -> bool {
+    matches!(
+        error,
+        bollard::errors::Error::DockerResponseServerError {
+            status_code: 404,
+            ..
+        }
+    )
 }
 
 fn panic_message(payload: &(dyn Any + Send)) -> String {

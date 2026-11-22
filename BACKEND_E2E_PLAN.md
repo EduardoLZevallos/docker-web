@@ -58,11 +58,19 @@ Completion means executable coverage, verified isolation/cleanup, and actionable
   - Post-run leak audit: no `docker-web-e2e` containers or images; the three pre-existing anonymous volumes were unchanged; no lingering cargo/backend-e2e processes.
   - Authorized-diff audit: only `backend/Cargo.toml` is modified (`futures-util` and `reqwest` added as dev-dependencies; `testcontainers` pinned to `=0.16.7`). All other changes are authorized untracked E2E docs/tests/assets. `backend/Cargo.lock` remains gitignored. No `backend/src`, legacy test, frontend, or configuration changes.
   - Records updated: `backend/tests/e2e_assets/README.md`, this Progress section, and `BACKEND_E2E_CHECKPOINT.md`. **No commit was made.**
+- PR #9 review round completed:
+  - Concurrency readers now require HTTP 200 during ordinary mutations; daemon-outage 503 assertions remain in the recovery test. Transient fixture identity is registered behind a reader gate before it can be observed, and readers acknowledge each mutation instead of relying on fixed sleeps.
+  - DinD recovery is bounded with `timeout_at` around both inspect and ping, including a 120-second-timeout client that can no longer overrun the 60-second recovery budget.
+  - A startup resource guard removes owned containers and the named data volume when Testcontainers panics. Real failure probes now cover a missing-Dockerfile build failure, an invalid backend config that exits, and a missing backend image that panics during creation.
+  - Shared fixture helpers and an independent `TopologySnapshot` representation replace duplicated image/network/container/edge code; `resilience` is split into recovery, concurrency, and cleanup modules.
+  - The DinD data root is a fresh labeled named volume. Cleanup checks target owned containers/images/volumes instead of all host volumes. One immutable backend image is built per suite invocation and removed by a detached janitor after the test process exits.
+  - The size matrix now checks `/api/containers`, `/api/networks`, and `/api/topology` cross-endpoint consistency. New coverage includes restarting-container topology and an unresponsive-but-connected daemon (paused DinD) with bounded health/discovery responses.
+  - Final serial run: **33 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out** (39 tests) in **219.07 s**; log `/tmp/opencode/backend_e2e_review_final.log`. The only failures remain the six inactive-visibility contracts. No owned containers, images, volumes, or processes remained after the suite.
 
 ## Limitations
 
 - The target is not green: the six inactive-container visibility tests fail against the current running-only implementation. They must remain enabled as the desired contract, and the suite exits 101 with exactly those failures until the application lists inactive containers without topology edges.
-- The target is serial and relatively slow (~6 minutes) because each scenario builds a release backend image and starts a fresh DinD daemon.
+- The target is serial and takes roughly four minutes; each scenario starts a fresh DinD daemon, while the release backend image is built once per suite invocation.
 - It requires a privileged-capable outer Docker daemon, network access for image pulls, and a local gitignored `backend/Cargo.lock`. Inner pulls use the test-only `https://mirror.gcr.io` registry mirror with Docker Hub fallback.
 - Validated with outer Docker 29.1.3 and inner Docker 26.1.4; other versions are untested. Legacy integration targets are excluded because they query the host daemon.
 - Exit-code assertions for exits 0/7/137 exist but are not reached while the inactive-visibility assertion fails first.

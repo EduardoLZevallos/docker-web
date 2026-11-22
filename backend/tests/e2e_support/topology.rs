@@ -4,50 +4,22 @@ use std::{
 };
 
 use bollard::{
-    container::{
-        Config as ContainerConfig, CreateContainerOptions, InspectContainerOptions,
-        ListContainersOptions, RemoveContainerOptions,
-    },
+    container::{InspectContainerOptions, ListContainersOptions, RemoveContainerOptions},
     models::HostConfig,
-    network::{ConnectNetworkOptions, CreateNetworkOptions, DisconnectNetworkOptions},
+    network::{ConnectNetworkOptions, DisconnectNetworkOptions},
 };
-use futures_util::StreamExt;
 use serde_json::Value;
 use tokio::time::{Instant, sleep};
 
-use super::E2eHarness;
-
-const IMAGE: &str = "alpine:3.20";
-
-async fn ensure_image(h: &E2eHarness) {
-    let mut stream = h.docker.create_image(
-        Some(bollard::image::CreateImageOptions {
-            from_image: IMAGE,
-            ..Default::default()
-        }),
-        None,
-        None,
-    );
-    while let Some(result) = stream.next().await {
-        result.unwrap_or_else(|e| panic!("pull {IMAGE}: {e}"));
-    }
-}
+use super::{
+    E2eHarness,
+    fixtures::{self, NetworkManifest, TopologySnapshot},
+};
 
 async fn network(h: &E2eHarness, name: &str, driver: &str, internal: bool) -> String {
-    let mut labels = h.labels();
-    labels.insert("com.docker-web.e2e.fixture".into(), "topology".into());
-    h.docker
-        .create_network(CreateNetworkOptions {
-            name: name.to_owned(),
-            driver: driver.to_owned(),
-            internal,
-            labels,
-            ..Default::default()
-        })
+    fixtures::create_network(h, name, driver, internal, "topology")
         .await
-        .unwrap()
         .id
-        .unwrap()
 }
 
 async fn container(
@@ -70,60 +42,19 @@ async fn create_container(
     host: HostConfig,
     ports: Option<Vec<&str>>,
 ) -> String {
-    let mut labels = h.labels();
-    labels.insert("com.docker-web.e2e.fixture".into(), "topology".into());
-    let exposed_ports = ports.map(|ports| {
-        ports
-            .into_iter()
-            .map(|k| (k.to_owned(), HashMap::new()))
-            .collect()
-    });
-    let response = h
-        .docker
-        .create_container(
-            Some(CreateContainerOptions {
-                name: name.to_owned(),
-                platform: None,
-            }),
-            ContainerConfig {
-                image: Some(IMAGE.to_owned()),
-                cmd: Some(command.into_iter().map(str::to_owned).collect()),
-                exposed_ports,
-                labels: Some(labels),
-                host_config: Some(host),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    h.docker
-        .start_container::<String>(&response.id, None)
-        .await
-        .unwrap();
-    response.id
+    let container =
+        fixtures::create_container(h, name, &command, host, ports, None, "topology").await;
+    fixtures::start_container(h, &container.id).await;
+    container.id
 }
 
 async fn topology(h: &E2eHarness) -> Value {
-    let (status, body) = h.get("/api/topology").await;
-    assert_eq!(status, reqwest::StatusCode::OK, "topology response: {body}");
-    body
+    fixtures::topology(h).await
 }
 
 fn edge_set(body: &Value) -> BTreeSet<(String, String)> {
-    body["edges"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|e| {
-            (
-                e["source"].as_str().unwrap().to_owned(),
-                e["target"].as_str().unwrap().to_owned(),
-            )
-        })
-        .collect()
+    fixtures::edge_set(body)
 }
-
-type NetworkManifest = BTreeMap<String, String>;
 
 fn assert_exact_topology(
     body: &Value,
@@ -131,48 +62,11 @@ fn assert_exact_topology(
     expected_networks: &NetworkManifest,
     expected_edges: &BTreeSet<(String, String)>,
 ) {
-    let containers = body["containers"].as_array().unwrap();
-    let networks = body["networks"].as_array().unwrap();
-    let actual_container_ids: BTreeSet<_> = containers
-        .iter()
-        .map(|c| c["id"].as_str().unwrap().to_owned())
-        .collect();
-    let actual_networks: NetworkManifest = networks
-        .iter()
-        .map(|n| {
-            (
-                n["name"].as_str().unwrap().to_owned(),
-                n["id"].as_str().unwrap().to_owned(),
-            )
-        })
-        .collect();
-    assert_eq!(&actual_container_ids, expected_containers, "container IDs");
-    assert_eq!(&actual_networks, expected_networks, "network names and IDs");
-    assert_eq!(
-        actual_networks.values().collect::<BTreeSet<_>>().len(),
-        networks.len(),
-        "duplicate network IDs"
+    TopologySnapshot::from_value(body).assert_exact(
+        expected_containers,
+        expected_networks,
+        expected_edges,
     );
-    assert_eq!(
-        actual_container_ids.len(),
-        containers.len(),
-        "duplicate container IDs"
-    );
-    assert_eq!(
-        edge_set(body).len(),
-        body["edges"].as_array().unwrap().len(),
-        "duplicate topology edges"
-    );
-    let valid_sources = &actual_container_ids;
-    let valid_targets: BTreeSet<_> = actual_networks.values().cloned().collect();
-    assert!(
-        edge_set(body)
-            .iter()
-            .all(|(s, t)| valid_sources.contains(s) && valid_targets.contains(t)),
-        "edge has dangling endpoint"
-    );
-    assert_eq!(&edge_set(body), expected_edges, "exact topology edge set");
-    assert!(body["timestamp"].as_str().is_some());
 }
 
 async fn wait_topology(
@@ -184,26 +78,10 @@ async fn wait_topology(
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let body = topology(h).await;
-        let ids: BTreeSet<_> = body["containers"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|c| c["id"].as_str().unwrap().to_owned())
-            .collect();
-        let manifest: NetworkManifest = body["networks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|n| {
-                (
-                    n["name"].as_str().unwrap().to_owned(),
-                    n["id"].as_str().unwrap().to_owned(),
-                )
-            })
-            .collect();
-        if ids == *expected_containers
-            && manifest == *expected_networks
-            && edge_set(&body) == *expected_edges
+        let snapshot = TopologySnapshot::from_value(&body);
+        if snapshot.container_ids() == *expected_containers
+            && snapshot.network_manifest() == *expected_networks
+            && snapshot.edges == *expected_edges
         {
             return body;
         }
@@ -239,7 +117,7 @@ async fn matrix(h: &E2eHarness, distribution: &[usize]) {
         .filter_map(|n| Some((n.name?, n.id?)))
         .collect();
     let mut expected = BTreeSet::new();
-    ensure_image(h).await;
+    fixtures::ensure_image(h).await;
     let mut network_names = Vec::new();
     let mut net_ids = Vec::new();
     for i in 0..distribution.len() {
@@ -262,8 +140,8 @@ async fn matrix(h: &E2eHarness, distribution: &[usize]) {
         }
     }
     all_networks.extend(network_names.into_iter().zip(net_ids));
-    let body = wait_topology(h, &all_ids, &all_networks, &expected).await;
-    assert_exact_topology(&body, &all_ids, &all_networks, &expected);
+    wait_topology(h, &all_ids, &all_networks, &expected).await;
+    fixtures::assert_cross_endpoint_consistency(h, &all_ids, &all_networks, &expected).await;
 }
 
 #[tokio::test]
@@ -336,7 +214,7 @@ async fn given_multihomed_fixtures_when_membership_changes_then_topology_tracks_
                 .filter_map(|n| Some((n.name?, n.id?)))
                 .collect();
             let baseline_edges = BTreeSet::new();
-            ensure_image(h).await;
+            fixtures::ensure_image(h).await;
             let a = h.unique_name("multi-a");
             let b = h.unique_name("multi-b");
             let c = h.unique_name("multi-c");
@@ -475,7 +353,7 @@ async fn given_attached_container_when_topology_is_read_repeatedly_then_membersh
                 .into_iter()
                 .filter_map(|n| Some((n.name?, n.id?)))
                 .collect();
-            ensure_image(h).await;
+            fixtures::ensure_image(h).await;
             let n = h.unique_name("repeat-net");
             let nid = network(h, &n, "bridge", false).await;
             let c = container(
@@ -517,7 +395,7 @@ async fn given_attached_container_when_topology_is_read_repeatedly_then_membersh
 async fn given_network_modes_when_topology_read_then_metadata_and_memberships_match_docker() {
     E2eHarness::run(|h| {
         Box::pin(async move {
-            ensure_image(h).await;
+            fixtures::ensure_image(h).await;
             let bridge = h.unique_name("mode-bridge");
             let internal = h.unique_name("mode-internal");
             let bridge_id = network(h, &bridge, "bridge", false).await;
@@ -763,7 +641,7 @@ async fn given_network_modes_when_topology_read_then_metadata_and_memberships_ma
 async fn given_port_variants_when_containers_read_then_metadata_matches_docker() {
     E2eHarness::run(|h| {
         Box::pin(async move {
-            ensure_image(h).await;
+            fixtures::ensure_image(h).await;
             use bollard::models::PortBinding;
             let mut ids = Vec::new();
             ids.push(
