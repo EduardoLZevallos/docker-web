@@ -1,21 +1,20 @@
-# Docker Web Configuration
+# Docker Web Configuration (v0.1)
 
 # Discovery settings
-discovery_interval: 30  # Interval in seconds between container discovery scans
+discovery_interval: 30
 
 # Docker connection settings
-docker_socket_path: "/var/run/docker.sock"  # Path to the Docker socket
-reverse_proxy_url: ~  # Optional reverse proxy URL, set to null if not used
+docker_socket_path: "/var/run/docker.sock"
+docker_timeout_seconds: 120
+
+# Server settings
+bind_address: "0.0.0.0:3000"
 
 # Logging configuration
-logging_level: "info"  # Logging level (debug, info, warn, error)
-log_file_path: "/var/log/docker-web.log"  # Main application log file
-metrics_log_file_path: "/var/log/docker-web-metrics.log"  # Metrics log file
+logging_level: "info"
+log_file_path: "/var/log/docker-web.log"
+metrics_log_file_path: "/var/log/docker-web-metrics.log"
 
 # Frontend settings
-frontend_theme: "light"  # Default theme (light or dark)
-
-# Authentication settings
-auth:
-  username: "admin"  # Default admin username
-  password_hash: ~  # Password hash will be set on first run
+frontend_theme: "light"
+demo_mode: false
