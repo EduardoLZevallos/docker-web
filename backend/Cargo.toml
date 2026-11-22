@@ -27,6 +27,8 @@ actix-cors = "0.7.1"
 time = { version = "0.3.53", features = ["formatting"] }
 
 [dev-dependencies]
+futures-util = "0.3"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 tempfile = "3.8"    # For creating temporary test files
 test-log = "0.2"    # For capturing logs in tests
-testcontainers = "0.16"  # For Docker integration testing
+testcontainers = "=0.16.7"  # For Docker integration testing
