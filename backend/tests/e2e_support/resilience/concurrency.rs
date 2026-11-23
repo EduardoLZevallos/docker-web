@@ -158,30 +158,40 @@ fn validate_reader_topology(body: &Value, known: &Mutex<BTreeMap<String, KnownCo
 }
 
 async fn wait_for_observations(
-    counts: &[AtomicUsize],
-    targets: &[usize],
+    observations: &[AtomicUsize],
+    generation: usize,
     notify: &Notify,
     budget: Duration,
 ) {
     let deadline = Instant::now() + budget;
     loop {
         let notified = notify.notified();
-        if counts
+        if observations
             .iter()
-            .zip(targets)
-            .all(|(count, target)| count.load(Ordering::Acquire) >= *target)
+            .all(|observed| observed.load(Ordering::Acquire) >= generation)
         {
             return;
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         assert!(
             !remaining.is_zero(),
-            "concurrent readers did not acknowledge mutations"
+            "concurrent readers did not acknowledge mutation generation {generation}"
         );
         if timeout(remaining, notified).await.is_err() {
-            panic!("concurrent readers did not acknowledge mutations within {READ_TIMEOUT:?}");
+            panic!(
+                "concurrent readers did not acknowledge mutation generation {generation} within {READ_TIMEOUT:?}"
+            );
         }
     }
+}
+
+async fn acknowledge_mutation(
+    generation: &AtomicUsize,
+    observations: &[AtomicUsize],
+    notify: &Notify,
+) {
+    let generation = generation.fetch_add(1, Ordering::AcqRel) + 1;
+    wait_for_observations(observations, generation, notify, READ_TIMEOUT).await;
 }
 
 fn topology_is_converged(
@@ -397,7 +407,8 @@ async fn given_concurrent_readers_when_bounded_topology_mutations_run_then_snaps
 
             let gate = Arc::new(RwLock::new(()));
             let running = Arc::new(AtomicBool::new(true));
-            let counts: Arc<Vec<AtomicUsize>> =
+            let generation = Arc::new(AtomicUsize::new(0));
+            let observations: Arc<Vec<AtomicUsize>> =
                 Arc::new((0..READER_COUNT).map(|_| AtomicUsize::new(0)).collect());
             let notify = Arc::new(Notify::new());
             let mut readers = Vec::new();
@@ -407,12 +418,14 @@ async fn given_concurrent_readers_when_bounded_topology_mutations_run_then_snaps
                 let known = known.clone();
                 let gate = gate.clone();
                 let running = running.clone();
-                let counts = counts.clone();
+                let generation = generation.clone();
+                let counts = observations.clone();
                 let notify = notify.clone();
                 readers.push(tokio::spawn(async move {
                     let mut stats = ReaderStats::default();
                     while running.load(Ordering::Acquire) {
                         let read_guard = gate.read().await;
+                        let observed_generation = generation.load(Ordering::Acquire);
                         let response = http.get(&url).send().await.unwrap_or_else(|error| {
                             panic!("concurrent reader {reader_index} HTTP GET failed: {error}")
                         });
@@ -430,15 +443,14 @@ async fn given_concurrent_readers_when_bounded_topology_mutations_run_then_snaps
                         drop(read_guard);
                         stats.attempts += 1;
                         stats.ok += 1;
-                        counts[reader_index].fetch_add(1, Ordering::Release);
+                        counts[reader_index].fetch_max(observed_generation, Ordering::Release);
                         notify.notify_waiters();
                     }
                     stats
                 }));
             }
 
-            let targets = vec![1; READER_COUNT];
-            wait_for_observations(&counts, &targets, &notify, READ_TIMEOUT).await;
+            acknowledge_mutation(&generation, &observations, &notify).await;
 
             h.docker
                 .connect_network(
@@ -450,8 +462,7 @@ async fn given_concurrent_readers_when_bounded_topology_mutations_run_then_snaps
                 )
                 .await
                 .unwrap();
-            let targets = targets.iter().map(|target| target + 1).collect::<Vec<_>>();
-            wait_for_observations(&counts, &targets, &notify, READ_TIMEOUT).await;
+            acknowledge_mutation(&generation, &observations, &notify).await;
 
             h.docker
                 .disconnect_network(
@@ -463,8 +474,7 @@ async fn given_concurrent_readers_when_bounded_topology_mutations_run_then_snaps
                 )
                 .await
                 .unwrap();
-            let targets = targets.iter().map(|target| target + 1).collect::<Vec<_>>();
-            wait_for_observations(&counts, &targets, &notify, READ_TIMEOUT).await;
+            acknowledge_mutation(&generation, &observations, &notify).await;
 
             let net_c = fixtures::create_network(
                 h,
@@ -474,8 +484,7 @@ async fn given_concurrent_readers_when_bounded_topology_mutations_run_then_snaps
                 "concurrent-readers",
             )
             .await;
-            let targets = targets.iter().map(|target| target + 1).collect::<Vec<_>>();
-            wait_for_observations(&counts, &targets, &notify, READ_TIMEOUT).await;
+            acknowledge_mutation(&generation, &observations, &notify).await;
 
             // A future all-state listing could expose the transient container immediately after
             // creation. Register its identity under the write locks so no reader can observe it
@@ -503,18 +512,15 @@ async fn given_concurrent_readers_when_bounded_topology_mutations_run_then_snaps
                 fixtures::start_container(h, &c4.id).await;
                 c4
             };
-            let targets = targets.iter().map(|target| target + 1).collect::<Vec<_>>();
-            wait_for_observations(&counts, &targets, &notify, READ_TIMEOUT).await;
+            acknowledge_mutation(&generation, &observations, &notify).await;
 
             h.docker
                 .stop_container(&c3.id, Some(StopContainerOptions { t: 0 }))
                 .await
                 .unwrap();
-            let targets = targets.iter().map(|target| target + 1).collect::<Vec<_>>();
-            wait_for_observations(&counts, &targets, &notify, READ_TIMEOUT).await;
+            acknowledge_mutation(&generation, &observations, &notify).await;
             fixtures::start_container(h, &c3.id).await;
-            let targets = targets.iter().map(|target| target + 1).collect::<Vec<_>>();
-            wait_for_observations(&counts, &targets, &notify, READ_TIMEOUT).await;
+            acknowledge_mutation(&generation, &observations, &notify).await;
 
             h.docker
                 .remove_container(
@@ -526,12 +532,10 @@ async fn given_concurrent_readers_when_bounded_topology_mutations_run_then_snaps
                 )
                 .await
                 .unwrap();
-            let targets = targets.iter().map(|target| target + 1).collect::<Vec<_>>();
-            wait_for_observations(&counts, &targets, &notify, READ_TIMEOUT).await;
+            acknowledge_mutation(&generation, &observations, &notify).await;
 
             h.docker.remove_network(&net_c.id).await.unwrap();
-            let targets = targets.iter().map(|target| target + 1).collect::<Vec<_>>();
-            wait_for_observations(&counts, &targets, &notify, READ_TIMEOUT).await;
+            acknowledge_mutation(&generation, &observations, &notify).await;
 
             running.store(false, Ordering::Release);
             for (reader_index, reader) in readers.into_iter().enumerate() {

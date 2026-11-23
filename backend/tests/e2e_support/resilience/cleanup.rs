@@ -12,7 +12,7 @@ use bollard::{
 };
 use futures_util::FutureExt;
 
-use super::super::{CleanupProof, E2eHarness, StartupFault};
+use super::super::{BACKEND_STARTUP_FAILURE_CATEGORY, CleanupProof, E2eHarness, StartupFault};
 
 const OWNED_PREFIX: &str = "docker-web-e2e";
 const SUITE_IMAGE_PREFIX: &str = "docker-web-e2e:suite-";
@@ -229,12 +229,13 @@ async fn given_image_build_failure_when_startup_runs_then_owned_resources_are_re
 }
 
 // Given an invalid backend config, when the real backend exits during startup, then startup
-// returns the exit evidence and removes the backend, DinD, and labeled data volume.
+// returns the stable backend-startup failure category and removes the backend, DinD, and
+// labeled data volume.
 #[tokio::test]
 async fn given_invalid_backend_config_when_startup_runs_then_owned_resources_are_removed() {
     assert_startup_fault_cleanup(
         StartupFault::InvalidBackendConfig,
-        "backend did not expose port 3000 during startup",
+        BACKEND_STARTUP_FAILURE_CATEGORY,
     )
     .await;
 }

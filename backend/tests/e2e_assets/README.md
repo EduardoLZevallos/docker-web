@@ -1,22 +1,37 @@
 # Backend E2E test runner
 
-Run the isolated backend acceptance target from the repository root:
+Run the isolated backend acceptance target from the repository root through the
+suite runner:
 
 ```sh
 export PATH="/home/hubaxiya/.cargo/bin:$PATH"
-cargo test --manifest-path backend/Cargo.toml --test backend_e2e -- --test-threads=1
+backend/tests/run_backend_e2e.sh
 ```
+
+The runner builds the shared backend image once, runs the serial target, then
+removes and verifies the image. It exits with the test status, or with a failure
+if cleanup cannot be verified after a successful test run. Extra arguments are
+forwarded to libtest, for example
+`backend/tests/run_backend_e2e.sh <test-filter> --exact --nocapture`.
 
 ## Last validated result
 
-Validated on 2026-11-22 on branch `test/backend-e2e-contract` (uncommitted):
+Validated on 2026-11-23 on branch `test/backend-e2e-contract` through
+`backend/tests/run_backend_e2e.sh`:
 
-- Result: **33 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out** in
-  219.07 s (39 tests). Exit code 101 is expected because of the six contract
-  failures below.
-- No harness, setup, outage/recovery, concurrency, or cleanup test failed.
-- The validation log is preserved at `/tmp/opencode/backend_e2e_review_final.log`
-  (not committed).
+- Full serial target: **39 passed (exit 0)** in **211.23 s**.
+- Focused lifecycle run: **14 passed** in **81.41 s**.
+- The two new Docker-free library tests for the shared Docker summary mapping
+  passed.
+- `cargo check --test backend_e2e`, `bash -n backend/tests/run_backend_e2e.sh`,
+  and `git diff --check` passed.
+- The runner removed and verified the shared image; no owned image/tag,
+  container, or volume remained per the Docker CLI.
+- The full-validation log is preserved at
+  `/tmp/opencode/backend_e2e_lifecycle_fix_full.log` (not committed).
+
+Production scope and regressions were validated. Legacy integration targets
+were not executed.
 
 ## Prerequisites
 
@@ -33,7 +48,9 @@ Validated on 2026-11-22 on branch `test/backend-e2e-contract` (uncommitted):
   test image builds with `cargo build --locked`; generate the lockfile with a
   normal backend build first if it is missing.
 - Run serially. Each scenario controls its own daemon and socket lifecycle, so
-  parallel runs would overlap infrastructure.
+  parallel runs would overlap infrastructure. Invoke the target through
+  `backend/tests/run_backend_e2e.sh`; the harness requires the runner-provided
+  `DOCKER_WEB_E2E_SUITE_IMAGE` and does not build or detach a cleanup process.
 
 ## Isolated topology
 
@@ -53,35 +70,41 @@ inner containers/networks, the backend and DinD containers, the named DinD data
 volume, socket, and temporary config, then verifies the owned containers and
 volume are gone. Cleanup errors fail the test. A startup guard removes owned
 containers and the data volume even when Testcontainers panics before a harness
-exists. The shared backend image is removed by a detached janitor after the test
-process exits, so scenarios reuse it without leaving an image behind.
+exists. The shared backend image is built once by the suite runner and explicitly
+removed and verified after the test process exits, so scenarios reuse it without
+leaving an image behind.
 
 Legacy integration targets use the host Docker daemon and are outside this
 command.
 
-## Expected failures and interpretation
+## Lifecycle contract and interpretation
 
-These tests intentionally assert the desired contract that inactive containers
-remain visible with no topology edges. The current application lists only running
-containers, so they are expected to fail and must stay enabled:
+Production now uses one shared Docker summary mapping and all-state queries for
+`/api/containers` and `/api/topology`. Topology keeps every container as a node
+but adds edges only for Docker states `running`, `paused`, and `restarting`.
+Inactive containers keep their status, network attachments, and the existing
+JSON shape; only the private edge-eligibility flag is omitted from JSON. The
+existing running-only Rust method is retained.
 
-- `e2e_support::lifecycle::given_created_container_when_both_apis_read_then_it_is_visible_without_topology_edges`
-- `e2e_support::lifecycle::given_stopped_container_when_both_apis_read_then_it_remains_visible_without_topology_edges`
-- `e2e_support::lifecycle::given_exit_zero_container_when_both_apis_read_then_it_is_visible_without_topology_edges`
-- `e2e_support::lifecycle::given_exit_nonzero_container_when_both_apis_read_then_it_is_visible_without_topology_edges`
-- `e2e_support::lifecycle::given_killed_container_when_both_apis_read_then_it_is_visible_without_topology_edges`
-- `e2e_support::lifecycle::given_mixed_lifecycle_states_when_topology_read_then_only_active_membership_edges_exist`
+Interpret any failure as a regression or harness/setup problem. The expected
+full-target outcome is **39 passed**, exit 0.
 
-For the single-container cases, independent Docker inspect confirms
-`created`/`exited`, but `/api/containers` and `/api/topology` omit the container.
-The mixed-state case sees only running/paused containers and omits the
-created/exited nodes. The exit-0, exit-7, and killed cases also assert API status
-exit codes, but the visibility assertion fails first. These are contract
-failures, not harness failures: the fixtures exist in the inner daemon and the
-other scenarios in the same serial run pass.
+### Historical pre-fix evidence
+
+Before the production change, six inactive-visibility contracts failed against
+the then running-only API: **33 passed; 6 failed** in 213.66 s, exit 101, log
+`/tmp/opencode/backend_e2e_runner_full.log`. The created, stopped, exit-zero,
+exit-nonzero, killed, and mixed-state cases confirmed CREATED/EXITED with Docker
+inspect while `/api/containers` and `/api/topology` omitted those containers.
+These were contract failures, not harness failures, and are now historical; the
+full target passes all 39 tests.
 
 ## Additional contract coverage
 
+- Lifecycle checks cover created, running, stopped, exit 0/7/137, killed, paused,
+  unpaused, restarting, removed, mixed states, and health transitions. Inactive
+  containers remain visible without edges; running/paused/restarting containers
+  keep their attachment edges.
 - The topology size matrix runs against `/api/containers`, `/api/networks`, and
   `/api/topology`, checking stable-state cross-endpoint consistency.
 - Concurrent readers require HTTP 200 throughout ordinary mutations, pre-register
@@ -97,14 +120,10 @@ other scenarios in the same serial run pass.
   config that exits the binary, and a missing backend image that makes
   Testcontainers panic. Each must leave no owned container or data volume.
 
-Interpret any other failure as a regression or harness/setup problem. The
-expected full-target outcome is exactly 33 passed and those six failures (exit
-code 101). A focused rerun, for example, is:
+A focused lifecycle rerun is:
 
 ```sh
-cargo test --manifest-path backend/Cargo.toml --test backend_e2e \
-  e2e_support::lifecycle::given_created_container_when_both_apis_read_then_it_is_visible_without_topology_edges \
-  -- --exact --nocapture --test-threads=1
+backend/tests/run_backend_e2e.sh e2e_support::lifecycle:: --nocapture
 ```
 
 Failure output includes the last HTTP response, outer/inner Docker versions,

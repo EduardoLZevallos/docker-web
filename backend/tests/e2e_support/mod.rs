@@ -43,6 +43,7 @@ const INNER_READINESS_TIMEOUT_SECONDS: u64 = 2;
 // Streaming image pulls can pause between progress chunks; a short per-connection
 // timeout makes the fixture pull flaky even though the daemon is healthy.
 const INNER_DOCKER_TIMEOUT_SECONDS: u64 = 120;
+pub const BACKEND_STARTUP_FAILURE_CATEGORY: &str = "backend failed before HTTP readiness";
 
 /// Test-only fault injection point for proving partial-startup cleanup.
 ///
@@ -273,7 +274,7 @@ impl E2eHarness {
                 .expect_err("missing Dockerfile must fail the image build");
             return Self::fail_startup(harness, error).await;
         }
-        if let Err(error) = ensure_suite_image(&root).await {
+        if let Err(error) = ensure_suite_image().await {
             return Self::fail_startup(harness, error).await;
         }
         if fault == StartupFault::InvalidBackendConfig {
@@ -321,7 +322,7 @@ impl E2eHarness {
                 return Self::fail_startup(
                     harness,
                     format!(
-                        "backend did not expose port 3000 during startup: {}",
+                        "{BACKEND_STARTUP_FAILURE_CATEGORY}: backend did not expose port 3000 during startup: {}",
                         panic_message(payload.as_ref())
                     ),
                 )
@@ -596,7 +597,7 @@ impl E2eHarness {
                         Some(ContainerStateStatusEnum::EXITED | ContainerStateStatusEnum::DEAD)
                     ) {
                         return Err(format!(
-                            "backend exited during startup: status={:?} exit_code={:?} error={:?}",
+                            "{BACKEND_STARTUP_FAILURE_CATEGORY}: backend exited during startup: status={:?} exit_code={:?} error={:?}",
                             state.status, state.exit_code, state.error
                         ));
                     }
@@ -618,7 +619,7 @@ impl E2eHarness {
             }
             if Instant::now() >= deadline {
                 return Err(format!(
-                    "backend did not become HTTP-ready within {timeout:?}"
+                    "{BACKEND_STARTUP_FAILURE_CATEGORY}: backend did not become HTTP-ready within {timeout:?}"
                 ));
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -956,43 +957,36 @@ impl Drop for StartupGuard {
 }
 
 static SUITE_IMAGE_TAG: OnceLock<String> = OnceLock::new();
-static SUITE_IMAGE_BUILD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+const SUITE_IMAGE_ENV: &str = "DOCKER_WEB_E2E_SUITE_IMAGE";
 
 fn suite_image_tag() -> String {
-    format!("docker-web-e2e:suite-{}", std::process::id())
+    std::env::var(SUITE_IMAGE_ENV)
+        .unwrap_or_else(|_| format!("docker-web-e2e:suite-{}", std::process::id()))
 }
 
-async fn ensure_suite_image(root: &Path) -> Result<String, String> {
+async fn ensure_suite_image() -> Result<String, String> {
     if let Some(tag) = SUITE_IMAGE_TAG.get() {
         return Ok(tag.clone());
     }
-    let build_lock = SUITE_IMAGE_BUILD.get_or_init(|| tokio::sync::Mutex::new(()));
-    let _guard = build_lock.lock().await;
-    if let Some(tag) = SUITE_IMAGE_TAG.get() {
-        return Ok(tag.clone());
+    if std::env::var_os(SUITE_IMAGE_ENV).is_none() {
+        return Err(format!(
+            "backend E2E requires a runner-managed image; run backend/tests/run_backend_e2e.sh (or set {SUITE_IMAGE_ENV} to a prebuilt image and remove it after the tests)"
+        ));
     }
     let tag = suite_image_tag();
-    let dockerfile = root.join("backend/tests/e2e_assets/Dockerfile");
-    build_backend_image(root, &tag, &dockerfile).await?;
-    spawn_image_janitor(&tag);
+    let output = Command::new("docker")
+        .args(["image", "inspect", &tag])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("verify runner-provided backend image {tag}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "runner-provided backend image {tag} is missing: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
     let _ = SUITE_IMAGE_TAG.set(tag.clone());
     Ok(tag)
-}
-
-/// The shared backend image is removed by a detached janitor after this test
-/// process exits, so repeated scenarios do not rebuild it and the suite leaves
-/// no owned image behind.
-fn spawn_image_janitor(tag: &str) {
-    let pid = std::process::id();
-    let script = format!(
-        "while kill -0 {pid} 2>/dev/null; do sleep 1; done; docker image rm {tag} >/dev/null 2>&1 || true"
-    );
-    let _ = Command::new("sh")
-        .args(["-c", &script])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
 }
 
 async fn wait_for_inner_docker(

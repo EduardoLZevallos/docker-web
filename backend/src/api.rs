@@ -63,11 +63,12 @@ pub async fn health(docker_client: web::Data<DockerClient>) -> ActixResult<HttpR
     Ok(HttpResponse::Ok().json(health_resp))
 }
 
-/// List all running Docker containers.
-pub async fn get_containers(
-    docker_client: web::Data<DockerClient>,
-) -> ActixResult<HttpResponse> {
-    match docker_client.list_running_containers().await {
+/// List all Docker containers, including inactive ones.
+///
+/// Inactive containers remain visible with their metadata but are not
+/// eligible to contribute topology edges.
+pub async fn get_containers(docker_client: web::Data<DockerClient>) -> ActixResult<HttpResponse> {
+    match docker_client.list_containers().await {
         Ok(containers) => {
             log::info!("Successfully retrieved {} containers", containers.len());
             Ok(HttpResponse::Ok().json(containers))
@@ -97,13 +98,14 @@ pub async fn get_networks(
 
 /// Combined container and network topology with edges.
 ///
-/// Fetches running containers and networks concurrently, then builds edges
-/// by matching container-side network memberships to network IDs.
+/// Fetches all containers and networks concurrently, then builds edges by
+/// matching active containers' network memberships to network IDs. Inactive
+/// containers remain as nodes without edges.
 pub async fn get_network_topology(
     docker_client: web::Data<DockerClient>,
 ) -> ActixResult<HttpResponse> {
     let (containers_result, networks_result) = tokio::join!(
-        docker_client.list_running_containers(),
+        docker_client.list_containers(),
         docker_client.list_networks()
     );
 
@@ -122,6 +124,7 @@ pub async fn get_network_topology(
 
             let edges: Vec<Edge> = containers
                 .iter()
+                .filter(|c| c.is_edge_eligible())
                 .flat_map(|c| {
                     c.networks.keys().filter_map(|net_name| {
                         name_to_id.get(net_name.as_str()).map(|net_id| Edge {
