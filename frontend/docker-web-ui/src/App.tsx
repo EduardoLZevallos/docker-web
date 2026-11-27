@@ -338,7 +338,7 @@ function App() {
     >
       <header className="app-header">
         <div className="app-title-block">
-          <h1>Docker Network Discovery</h1>
+          <h1>docker-web</h1>
           <p className="app-subtitle">
             Live container and network topology from the backend API.
           </p>
