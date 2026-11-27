@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use bollard::container::ListContainersOptions;
-use bollard::network::ListNetworksOptions;
-use bollard::models::PortTypeEnum;
 use bollard::Docker;
+use bollard::container::ListContainersOptions;
+use bollard::models::{ContainerSummary, PortTypeEnum};
+use bollard::network::ListNetworksOptions;
 use thiserror::Error;
 
 use crate::config::Config;
@@ -55,51 +55,72 @@ impl DockerClient {
 
     /// List all running containers with their ports and network attachments.
     pub async fn list_running_containers(&self) -> Result<Vec<ContainerInfo>, DockerError> {
+        self.list_containers_with_all(false).await
+    }
+
+    /// List all containers, including inactive ones, with their ports and network attachments.
+    pub async fn list_containers(&self) -> Result<Vec<ContainerInfo>, DockerError> {
+        self.list_containers_with_all(true).await
+    }
+
+    async fn list_containers_with_all(&self, all: bool) -> Result<Vec<ContainerInfo>, DockerError> {
         let options = Some(ListContainersOptions::<String> {
-            all: false,
+            all,
             ..Default::default()
         });
 
         let containers = self.client.list_containers(options).await?;
 
-        let container_infos = containers
+        Ok(containers
             .into_iter()
-            .map(|c| ContainerInfo {
-                id: c.id.unwrap_or_default(),
-                name: c.names
-                    .unwrap_or_default()
-                    .first()
-                    .cloned()
-                    .unwrap_or_default()
-                    .trim_start_matches('/')
-                    .to_string(),
-                image: c.image.unwrap_or_default(),
-                status: c.status.unwrap_or_default(),
-                created: c.created.unwrap_or_default(),
-                ports: c.ports
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|p| PortInfo {
-                        private: p.private_port,
-                        public: p.public_port,
-                        protocol: Self::port_protocol_to_string(p.typ).into(),
-                    })
-                    .collect(),
-                networks: c.network_settings
-                    .and_then(|ns| ns.networks)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|(name, settings)| {
-                        (name, ContainerNetworkInfo {
+            .map(Self::container_info_from_summary)
+            .collect())
+    }
+
+    fn container_info_from_summary(c: ContainerSummary) -> ContainerInfo {
+        ContainerInfo {
+            id: c.id.unwrap_or_default(),
+            name: c
+                .names
+                .unwrap_or_default()
+                .first()
+                .cloned()
+                .unwrap_or_default()
+                .trim_start_matches('/')
+                .to_string(),
+            image: c.image.unwrap_or_default(),
+            status: c.status.unwrap_or_default(),
+            created: c.created.unwrap_or_default(),
+            ports: c
+                .ports
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| PortInfo {
+                    private: p.private_port,
+                    public: p.public_port,
+                    protocol: Self::port_protocol_to_string(p.typ).into(),
+                })
+                .collect(),
+            networks: c
+                .network_settings
+                .and_then(|ns| ns.networks)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(name, settings)| {
+                    (
+                        name,
+                        ContainerNetworkInfo {
                             ip_address: settings.ip_address,
                             mac_address: settings.mac_address,
-                        })
-                    })
-                    .collect(),
-            })
-            .collect();
-
-        Ok(container_infos)
+                        },
+                    )
+                })
+                .collect(),
+            edge_eligible: matches!(
+                c.state.as_deref(),
+                Some("running" | "paused" | "restarting")
+            ),
+        }
     }
 
     /// List all Docker networks with subnet information and attached containers.
@@ -154,7 +175,7 @@ pub struct ContainerNetworkInfo {
     pub mac_address: Option<String>,
 }
 
-/// A running Docker container with its metadata.
+/// A Docker container with its metadata.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ContainerInfo {
     pub id: String,
@@ -165,6 +186,111 @@ pub struct ContainerInfo {
     pub ports: Vec<PortInfo>,
     /// Map of network name to attachment details.
     pub networks: HashMap<String, ContainerNetworkInfo>,
+    /// Whether this container is eligible to appear in topology edges.
+    #[serde(skip)]
+    edge_eligible: bool,
+}
+
+impl ContainerInfo {
+    /// Whether this container is eligible to appear in topology edges.
+    pub(crate) fn is_edge_eligible(&self) -> bool {
+        self.edge_eligible
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use bollard::models::{ContainerSummaryNetworkSettings, EndpointSettings, Port};
+
+    use super::*;
+
+    fn summary(state: Option<&str>) -> ContainerSummary {
+        ContainerSummary {
+            id: Some("container-id".to_string()),
+            names: Some(vec!["/fixture".to_string()]),
+            image: Some("nginx:latest".to_string()),
+            created: Some(1_700_000_000),
+            state: state.map(str::to_string),
+            status: Some("Exited (0) 2 minutes ago".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn container_summary_maps_edge_eligibility_from_state() {
+        for state in ["running", "paused", "restarting"] {
+            let info = DockerClient::container_info_from_summary(summary(Some(state)));
+            assert!(
+                info.is_edge_eligible(),
+                "state {state:?} should be edge eligible"
+            );
+        }
+
+        for state in ["exited", "created", "dead", "removing", "unknown"] {
+            let info = DockerClient::container_info_from_summary(summary(Some(state)));
+            assert!(
+                !info.is_edge_eligible(),
+                "state {state:?} should not be edge eligible"
+            );
+        }
+
+        let missing_state = DockerClient::container_info_from_summary(summary(None));
+        assert!(!missing_state.is_edge_eligible());
+    }
+
+    #[test]
+    fn inactive_summary_preserves_metadata_without_serializing_eligibility() {
+        let mut inactive = summary(Some("exited"));
+        inactive.ports = Some(vec![Port {
+            ip: Some("0.0.0.0".to_string()),
+            private_port: 8080,
+            public_port: Some(18080),
+            typ: Some(PortTypeEnum::TCP),
+        }]);
+        inactive.network_settings = Some(ContainerSummaryNetworkSettings {
+            networks: Some(HashMap::from([(
+                "fixture-net".to_string(),
+                EndpointSettings {
+                    ip_address: Some("172.30.0.2".to_string()),
+                    mac_address: Some("02:42:ac:1e:00:02".to_string()),
+                    ..Default::default()
+                },
+            )])),
+        });
+
+        let info = DockerClient::container_info_from_summary(inactive);
+
+        assert_eq!(info.id, "container-id");
+        assert_eq!(info.name, "fixture");
+        assert_eq!(info.image, "nginx:latest");
+        assert_eq!(info.status, "Exited (0) 2 minutes ago");
+        assert_eq!(info.created, 1_700_000_000);
+        assert!(!info.is_edge_eligible());
+        assert_eq!(info.ports.len(), 1);
+        assert_eq!(info.ports[0].private, 8080);
+        assert_eq!(info.ports[0].public, Some(18080));
+        assert_eq!(info.ports[0].protocol, "tcp");
+        let attachment = info
+            .networks
+            .get("fixture-net")
+            .expect("network attachment is preserved");
+        assert_eq!(attachment.ip_address.as_deref(), Some("172.30.0.2"));
+        assert_eq!(attachment.mac_address.as_deref(), Some("02:42:ac:1e:00:02"));
+
+        let json = serde_json::to_value(&info).expect("container info serializes");
+        assert_eq!(json["status"], "Exited (0) 2 minutes ago");
+        assert_eq!(json["networks"]["fixture-net"]["ip_address"], "172.30.0.2");
+        assert_eq!(
+            json["networks"]["fixture-net"]["mac_address"],
+            "02:42:ac:1e:00:02"
+        );
+        assert!(
+            json.get("edge_eligible").is_none(),
+            "private eligibility must not be serialized: {json}"
+        );
+    }
 }
 
 /// A Docker network with its configuration and member containers.

@@ -1,0 +1,9 @@
+discovery_interval: 30
+docker_socket_path: "/e2e/docker.sock"
+docker_timeout_seconds: 2
+bind_address: "0.0.0.0:3000"
+logging_level: "info"
+log_file_path: "/tmp/docker-web-e2e.log"
+metrics_log_file_path: "/tmp/docker-web-e2e-metrics.log"
+frontend_theme: "light"
+demo_mode: false
