@@ -1,0 +1,96 @@
+name: docker-web
+
+services:
+  docker-socket-proxy:
+    build:
+      context: .
+      dockerfile: deploy/docker-socket-proxy/Dockerfile
+    image: docker-web/docker-socket-proxy:local
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:mode=1777
+    volumes:
+      - ${DOCKER_HOST_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock:ro
+      - docker-api-socket:/run/docker-api
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /run/docker-api/docker.sock"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: docker-web/backend:local
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:mode=1777
+    depends_on:
+      docker-socket-proxy:
+        condition: service_healthy
+    volumes:
+      - docker-api-socket:/run/docker-api:ro
+    configs:
+      - source: docker-web-config
+        target: /app/config/config.yaml
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/docker-web-ui/Dockerfile
+    image: docker-web/web:local
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /var/cache/nginx:mode=1777
+      - /var/run:mode=1777
+      - /tmp:mode=1777
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+configs:
+  docker-web-config:
+    file: ./deploy/config/config.yaml
+
+volumes:
+  docker-api-socket:

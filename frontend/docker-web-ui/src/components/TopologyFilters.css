@@ -1,0 +1,131 @@
+.topology-filters {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px 14px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.filter-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.filter-label {
+  color: var(--text-subtle);
+  font-size: 0.74rem;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.filter-control {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: min(430px, 42vw);
+  min-width: 230px;
+}
+
+.filter-select {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-muted);
+  color: var(--text);
+  font-size: 0.84rem;
+}
+
+.filter-selected-id {
+  color: var(--text-subtle);
+  font-size: 0.68rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.filter-select:focus {
+  border-color: var(--accent);
+  outline: 3px solid #f59e0b;
+  outline-offset: 2px;
+}
+
+.published-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-muted);
+  color: var(--text);
+  font-size: 0.84rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.published-filter input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.filter-reset {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 8px 11px;
+  background: var(--panel-bg);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.filter-reset:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.filter-hint {
+  flex-basis: 100%;
+  color: var(--text-subtle);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  text-align: right;
+}
+
+@media (max-width: 1120px) {
+  .topology-filters {
+    justify-content: flex-start;
+  }
+
+  .filter-hint {
+    text-align: left;
+  }
+}
+
+@media (max-width: 760px) {
+  .topology-filters,
+  .filter-field,
+  .filter-control {
+    width: 100%;
+  }
+
+  .filter-field {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .filter-control {
+    min-width: 0;
+  }
+
+  .published-filter,
+  .filter-reset {
+    white-space: normal;
+  }
+}

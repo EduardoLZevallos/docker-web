@@ -1,0 +1,122 @@
+.topology-list {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel-bg);
+  box-shadow: var(--shadow);
+}
+
+.topology-list > h2 {
+  margin-bottom: 14px;
+  font-size: 1.02rem;
+  letter-spacing: -0.015em;
+}
+
+.topology-list-group + .topology-list-group {
+  margin-top: 18px;
+}
+
+.topology-list-group h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.count-badge {
+  min-width: 24px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--panel-muted);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.node-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.node-list-button {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-muted);
+  color: var(--text);
+  text-align: left;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.node-list-button:hover {
+  border-color: var(--accent);
+  background: var(--panel-bg);
+}
+
+.node-list-button.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel-bg));
+  box-shadow: inset 4px 0 0 var(--accent);
+}
+
+.node-list-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.node-list-meta {
+  flex: 0 0 auto;
+  max-width: 48%;
+  overflow: hidden;
+  color: var(--text-subtle);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-empty {
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  color: var(--text-subtle);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+@media (max-width: 1120px) {
+  .node-list {
+    max-height: 210px;
+  }
+}
+
+.node-list-button {
+  flex-wrap: wrap;
+}
+
+.node-list-id {
+  flex-basis: 100%;
+  overflow: hidden;
+  color: var(--text-subtle);
+  font-size: 0.65rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

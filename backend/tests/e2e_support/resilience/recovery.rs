@@ -73,6 +73,7 @@ async fn given_running_fixture_when_daemon_outage_and_restart_occur_then_backend
             assert_eq!(config_code, reqwest::StatusCode::OK, "{config}");
             assert_eq!(config["demo_mode"], false);
             assert_eq!(config["theme"], "light");
+            assert_eq!(config["discovery_interval"], 30);
             let (topology_code, topology) = h.get("/api/topology").await;
             assert_eq!(topology_code, reqwest::StatusCode::OK, "{topology}");
             fixtures::assert_timestamp(&topology["timestamp"]);
@@ -116,6 +117,7 @@ async fn given_running_fixture_when_daemon_outage_and_restart_occur_then_backend
                 "config remains available during outage: {config}"
             );
             assert_eq!(config["demo_mode"], false);
+            assert_eq!(config["discovery_interval"], 30);
 
             h.start_dind().await;
             wait_health(h, "healthy", true, Duration::from_secs(60)).await;
@@ -236,6 +238,7 @@ async fn given_unresponsive_daemon_when_endpoints_read_then_responses_are_bounde
             .expect("config must stay available while the daemon socket is unresponsive");
             assert_eq!(status, reqwest::StatusCode::OK, "{config}");
             assert_eq!(config["demo_mode"], false);
+            assert_eq!(config["discovery_interval"], 30);
 
             h.unpause_dind().await;
             wait_health(h, "healthy", true, Duration::from_secs(60)).await;

@@ -22,7 +22,11 @@ rm -f /e2e/docker.sock
 
 # Prefer a public pull-through mirror to avoid anonymous Docker Hub rate limits.
 # Docker falls back to Docker Hub when the mirror is unavailable.
+# IPv6 is enabled only for user-defined networks so dual-stack fixture
+# coverage exercises real Docker IPv4/IPv6 attachments and host bindings.
 exec /usr/local/bin/dockerd-entrypoint.sh dockerd \
     --host=unix:///e2e/docker.sock \
     --data-root=/var/lib/docker \
+    --ipv6 \
+    --fixed-cidr-v6=fd00:dead:beef::/64 \
     --registry-mirror=https://mirror.gcr.io

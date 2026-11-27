@@ -128,6 +128,7 @@ async fn get_config_returns_demo_mode_and_theme() {
     let json: Value = serde_json::from_slice(&body).expect("Failed to parse JSON response");
     assert_eq!(json["demo_mode"], false);
     assert_eq!(json["theme"], "light");
+    assert_eq!(json["discovery_interval"], 30);
 }
 
 #[tokio::test]
@@ -357,6 +358,7 @@ async fn get_config_with_demo_mode_true_returns_demo_mode_enabled() {
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["demo_mode"], true);
     assert_eq!(json["theme"], "dark");
+    assert_eq!(json["discovery_interval"], 30);
 }
 
 #[tokio::test]

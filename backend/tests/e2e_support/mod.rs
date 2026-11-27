@@ -28,6 +28,7 @@ use testcontainers::{
 };
 use tokio::{process::Command as TokioCommand, time::Instant};
 
+pub mod browser;
 pub mod fixtures;
 pub mod lifecycle;
 pub mod resilience;
@@ -80,6 +81,26 @@ impl StartupFault {
     }
 }
 
+/// Per-instance YAML config overrides applied before the backend container starts.
+///
+/// Overrides keep scenario-specific settings (for example a browser-friendly
+/// discovery interval) out of the shared fixture used by the rest of the suite.
+#[derive(Clone, Debug, Default)]
+pub struct HarnessOverrides {
+    config: Vec<(String, String)>,
+}
+
+impl HarnessOverrides {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn config(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.config.push((key.into(), value.into()));
+        self
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CleanupProof {
     pub containers: Vec<String>,
@@ -108,7 +129,15 @@ impl E2eHarness {
     where
         F: for<'a> FnOnce(&'a E2eHarness) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
     {
-        Self::run_with_startup_fault(StartupFault::None, body)
+        Self::run_with_overrides(HarnessOverrides::new(), body).await;
+    }
+
+    /// Runs a test body with per-instance config overrides.
+    pub async fn run_with_overrides<F>(overrides: HarnessOverrides, body: F)
+    where
+        F: for<'a> FnOnce(&'a E2eHarness) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
+    {
+        Self::run_with_startup_fault_and_overrides(StartupFault::None, overrides, body)
             .await
             .unwrap_or_else(|error| panic!("E2E harness startup failed: {error}"));
     }
@@ -120,7 +149,18 @@ impl E2eHarness {
     where
         F: for<'a> FnOnce(&'a E2eHarness) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
     {
-        let mut harness = Self::start(fault).await?;
+        Self::run_with_startup_fault_and_overrides(fault, HarnessOverrides::new(), body).await
+    }
+
+    async fn run_with_startup_fault_and_overrides<F>(
+        fault: StartupFault,
+        overrides: HarnessOverrides,
+        body: F,
+    ) -> Result<(), String>
+    where
+        F: for<'a> FnOnce(&'a E2eHarness) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
+    {
+        let mut harness = Self::start(fault, &overrides).await?;
         let result = {
             let invocation = catch_unwind(AssertUnwindSafe(|| body(&harness)));
             match invocation {
@@ -153,8 +193,8 @@ impl E2eHarness {
         Ok(())
     }
 
-    async fn start(fault: StartupFault) -> Result<Self, String> {
-        match AssertUnwindSafe(Self::start_inner(fault))
+    async fn start(fault: StartupFault, overrides: &HarnessOverrides) -> Result<Self, String> {
+        match AssertUnwindSafe(Self::start_inner(fault, overrides))
             .catch_unwind()
             .await
         {
@@ -166,7 +206,10 @@ impl E2eHarness {
         }
     }
 
-    async fn start_inner(fault: StartupFault) -> Result<Self, String> {
+    async fn start_inner(
+        fault: StartupFault,
+        overrides: &HarnessOverrides,
+    ) -> Result<Self, String> {
         let run_id = unique_run_id();
         let root = workspace_root();
         let dind_volume_name = format!("docker-web-e2e-dind-data-{run_id}");
@@ -179,11 +222,13 @@ impl E2eHarness {
             tempfile::tempdir().map_err(|e| format!("create socket directory: {e}"))?;
         let config_dir =
             tempfile::tempdir().map_err(|e| format!("create config directory: {e}"))?;
+        let config_path = config_dir.path().join("config.yaml");
         std::fs::copy(
             root.join("backend/tests/e2e_assets/config.yaml"),
-            config_dir.path().join("config.yaml"),
+            &config_path,
         )
         .map_err(|e| format!("copy backend config: {e}"))?;
+        apply_config_overrides(&config_path, overrides)?;
 
         let outer_docker = Docker::connect_with_socket_defaults()
             .map_err(|e| format!("connect to outer Docker: {e}"))?;
@@ -401,6 +446,24 @@ impl E2eHarness {
 
     pub fn inner_socket_path(&self) -> PathBuf {
         self.socket_dir.path().join("docker.sock")
+    }
+
+    /// Exact outer Docker container ID owned by this harness's private DinD fixture.
+    pub fn dind_container_id(&self) -> &str {
+        self.dind.as_ref().expect("DinD fixture exists").id()
+    }
+
+    /// Exact outer Docker container ID of this harness's sibling backend fixture.
+    pub fn backend_container_id(&self) -> &str {
+        self.backend.as_ref().expect("backend fixture exists").id()
+    }
+
+    /// Outer Docker endpoint when the caller configured one explicitly.
+    pub fn outer_docker_host(&self) -> Option<String> {
+        std::env::var("DOCKER_HOST")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
     }
 
     pub async fn pause_dind(&self) {
@@ -1134,6 +1197,29 @@ async fn print_logs(docker: &Docker, id: &str, label: &str) {
         }
         Err(error) => eprintln!("--- unable to read {label} logs ({id}): {error} ---"),
     }
+}
+
+fn apply_config_overrides(path: &Path, overrides: &HarnessOverrides) -> Result<(), String> {
+    if overrides.config.is_empty() {
+        return Ok(());
+    }
+    let contents = std::fs::read_to_string(path)
+        .map_err(|error| format!("read backend config overrides: {error}"))?;
+    let mut value: serde_yaml::Value = serde_yaml::from_str(&contents)
+        .map_err(|error| format!("parse backend config overrides: {error}"))?;
+    let mapping = value
+        .as_mapping_mut()
+        .ok_or_else(|| "backend config fixture must be a YAML mapping".to_owned())?;
+    for (key, raw_value) in &overrides.config {
+        let parsed: serde_yaml::Value = serde_yaml::from_str(raw_value)
+            .map_err(|error| format!("parse backend config override {key}: {error}"))?;
+        mapping.insert(serde_yaml::Value::String(key.clone()), parsed);
+    }
+    let rendered = serde_yaml::to_string(&value)
+        .map_err(|error| format!("render backend config overrides: {error}"))?;
+    std::fs::write(path, rendered)
+        .map_err(|error| format!("write backend config overrides: {error}"))?;
+    Ok(())
 }
 
 fn workspace_root() -> PathBuf {
