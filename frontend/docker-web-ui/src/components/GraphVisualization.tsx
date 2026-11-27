@@ -157,7 +157,7 @@ function graphStyle(theme: ThemeName): cytoscape.StylesheetJson {
   const dark = theme === 'dark';
   const background = dark ? '#0f172a' : '#ffffff';
   const containerColor = dark ? '#3b82f6' : '#2563eb';
-  const networkColor = dark ? '#ef4444' : '#c026d3';
+  const networkColor = '#c026d3';
   const edgeColor = dark ? '#64748b' : '#64748b';
   const nodeText = dark ? '#ffffff' : '#0f172a';
   const highlightColor = '#f59e0b';
@@ -168,14 +168,13 @@ function graphStyle(theme: ThemeName): cytoscape.StylesheetJson {
       style: {
         label: 'data(label)',
         color: nodeText,
-        'font-family':
-          'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        'font-size': 10,
+        'font-family': 'Arial, Helvetica, sans-serif',
+        'font-size': 11,
         'font-weight': 600,
         'text-halign': 'center',
         'text-valign': 'center',
         'text-wrap': 'wrap',
-        'text-max-width': '96px',
+        'text-max-width': '132px',
         'text-overflow-wrap': 'anywhere',
         'text-outline-width': 2,
         'text-outline-color': background,
@@ -189,8 +188,8 @@ function graphStyle(theme: ThemeName): cytoscape.StylesheetJson {
       selector: 'node[kind = "container"]',
       style: {
         shape: 'round-rectangle',
-        width: 64,
-        height: 48,
+        width: 104,
+        height: 56,
         'background-color': containerColor,
       },
     },
@@ -198,8 +197,8 @@ function graphStyle(theme: ThemeName): cytoscape.StylesheetJson {
       selector: 'node[kind = "network"]',
       style: {
         shape: 'diamond',
-        width: 58,
-        height: 58,
+        width: 120,
+        height: 84,
         'background-color': networkColor,
       },
     },
@@ -320,7 +319,7 @@ function GraphVisualization({
       style: graphStyle(initialThemeRef.current),
       minZoom: 0.1,
       maxZoom: 4,
-      wheelSensitivity: 0.15,
+      wheelSensitivity: 1,
       boxSelectionEnabled: false,
       selectionType: 'single',
       layout: { name: 'preset' },

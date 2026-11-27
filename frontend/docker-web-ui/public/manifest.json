@@ -1,6 +1,6 @@
 {
   "short_name": "Docker Web",
-  "name": "Docker Network Discovery",
+  "name": "docker-web",
   "icons": [
     {
       "src": "favicon.ico",
