@@ -1,0 +1,146 @@
+.details-panel {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel-bg);
+  box-shadow: var(--shadow);
+}
+
+.details-panel > h2 {
+  margin-bottom: 12px;
+  font-size: 1.02rem;
+  letter-spacing: -0.015em;
+}
+
+.details-heading-row {
+  margin-bottom: 14px;
+}
+
+.details-heading-row h2 {
+  font-size: 1.08rem;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+.details-kind {
+  margin-bottom: 3px;
+  color: var(--text-subtle);
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.details-empty {
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  color: var(--text-subtle);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.details-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.details-grid > div {
+  min-width: 0;
+}
+
+.details-grid-wide {
+  grid-column: 1 / -1;
+}
+
+.details-grid dt {
+  margin-bottom: 4px;
+  color: var(--text-subtle);
+  font-size: 0.7rem;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.details-grid dd {
+  color: var(--text);
+  font-size: 0.84rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.compact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.network-attachment-list,
+.member-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.network-attachment-list li,
+.member-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-muted);
+}
+
+.network-attachment-list strong,
+.member-list strong {
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
+.network-attachment-list span,
+.member-list span {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+  .details-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.details-note {
+  margin-top: 8px;
+  color: var(--text-subtle);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.port-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+.port-list li:last-child {
+  border-bottom: 0;
+}
+
+.port-mapping {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.port-binding,
+.attachment-membership {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}

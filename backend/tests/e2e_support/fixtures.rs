@@ -11,7 +11,7 @@ use std::{
 use bollard::{
     container::{Config as ContainerConfig, CreateContainerOptions, InspectContainerOptions},
     models::{ContainerInspectResponse, HealthConfig, HostConfig},
-    network::CreateNetworkOptions,
+    network::{ConnectNetworkOptions, CreateNetworkOptions},
 };
 use futures_util::StreamExt;
 use serde_json::Value;
@@ -156,6 +156,21 @@ pub async fn create_and_start_network_container(
     container
 }
 
+pub async fn connect_container_to_network(h: &E2eHarness, container_id: &str, network: &str) {
+    h.docker
+        .connect_network(
+            network,
+            ConnectNetworkOptions {
+                container: container_id.to_owned(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_or_else(|error| {
+            panic!("connect fixture container {container_id} to {network}: {error}")
+        });
+}
+
 pub async fn start_container(h: &E2eHarness, id: &str) {
     h.docker
         .start_container::<String>(id, None)
@@ -255,6 +270,124 @@ pub fn assert_connection_error(status: reqwest::StatusCode, body: &Value, path: 
     assert_timestamp(&body["timestamp"]);
 }
 
+fn nullable_string_field(record: &Value, key: &str, context: &str) -> Option<String> {
+    match record.get(key) {
+        Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.clone()),
+        Some(other) => panic!("{context} must be a string or null: {other}"),
+        None => panic!("{context} is missing: {record}"),
+    }
+}
+
+fn normalized_nullable_string_field(
+    record: &Value,
+    key: &str,
+    context: &str,
+) -> Option<String> {
+    let value = nullable_string_field(record, key, context);
+    if let Some(value) = &value {
+        assert!(
+            !value.trim().is_empty(),
+            "{context} must be null instead of blank: {record}"
+        );
+    }
+    value
+}
+
+fn parse_topology_port(port: &Value) -> TopologyPort {
+    let private = port["private"]
+        .as_u64()
+        .and_then(|value| u16::try_from(value).ok())
+        .unwrap_or_else(|| panic!("container port private must be a u16: {port}"));
+    let public = match port.get("public") {
+        Some(Value::Null) => None,
+        Some(Value::Number(value)) => value
+            .as_u64()
+            .and_then(|value| u16::try_from(value).ok())
+            .map(Some)
+            .unwrap_or_else(|| panic!("container port public must be a u16 or null: {port}")),
+        Some(other) => panic!("container port public must be a u16 or null: {other}"),
+        None => panic!("container port public is missing: {port}"),
+    };
+    TopologyPort {
+        private,
+        public,
+        protocol: port["protocol"]
+            .as_str()
+            .unwrap_or_else(|| panic!("container port protocol must be a string: {port}"))
+            .to_owned(),
+        host_ip: normalized_nullable_string_field(port, "host_ip", "container port host_ip"),
+    }
+}
+
+fn parse_topology_attachment(attachment: &Value) -> TopologyAttachment {
+    TopologyAttachment {
+        network_id: normalized_nullable_string_field(
+            attachment,
+            "network_id",
+            "container attachment network_id",
+        ),
+        ipv4_address: normalized_nullable_string_field(
+            attachment,
+            "ipv4_address",
+            "container attachment ipv4_address",
+        ),
+        ipv6_address: normalized_nullable_string_field(
+            attachment,
+            "ipv6_address",
+            "container attachment ipv6_address",
+        ),
+        ip_address: nullable_string_field(
+            attachment,
+            "ip_address",
+            "container attachment legacy ip_address",
+        ),
+        mac_address: nullable_string_field(
+            attachment,
+            "mac_address",
+            "container attachment mac_address",
+        ),
+    }
+}
+
+fn parse_topology_ipam_config(config: &Value) -> TopologyIpamConfig {
+    TopologyIpamConfig {
+        subnet: normalized_nullable_string_field(
+            config,
+            "subnet",
+            "network IPAM config subnet",
+        ),
+        gateway: normalized_nullable_string_field(
+            config,
+            "gateway",
+            "network IPAM config gateway",
+        ),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TopologyPort {
+    pub private: u16,
+    pub public: Option<u16>,
+    pub protocol: String,
+    pub host_ip: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TopologyAttachment {
+    pub network_id: Option<String>,
+    pub ipv4_address: Option<String>,
+    pub ipv6_address: Option<String>,
+    pub ip_address: Option<String>,
+    pub mac_address: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TopologyIpamConfig {
+    pub subnet: Option<String>,
+    pub gateway: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TopologyContainer {
     pub id: String,
@@ -262,6 +395,9 @@ pub struct TopologyContainer {
     pub image: String,
     pub created: i64,
     pub status: String,
+    pub state: Option<String>,
+    pub ports: Vec<TopologyPort>,
+    pub networks: BTreeMap<String, TopologyAttachment>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -272,6 +408,7 @@ pub struct TopologyNetwork {
     pub scope: String,
     pub internal: bool,
     pub subnet: Option<String>,
+    pub ipam_configs: Option<Vec<TopologyIpamConfig>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -309,6 +446,23 @@ impl TopologySnapshot {
                     .as_str()
                     .unwrap_or_else(|| panic!("container status must be a string: {container}"))
                     .to_owned(),
+                state: normalized_nullable_string_field(container, "state", "container state"),
+                ports: container["ports"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("container ports must be an array: {container}"))
+                    .iter()
+                    .map(parse_topology_port)
+                    .collect(),
+                networks: container["networks"]
+                    .as_object()
+                    .unwrap_or_else(|| {
+                        panic!("container networks must be an object: {container}")
+                    })
+                    .iter()
+                    .map(|(name, attachment)| {
+                        (name.clone(), parse_topology_attachment(attachment))
+                    })
+                    .collect(),
             })
             .collect();
         let networks = body["networks"]
@@ -335,7 +489,18 @@ impl TopologySnapshot {
                 internal: network["internal"]
                     .as_bool()
                     .unwrap_or_else(|| panic!("network internal must be a boolean: {network}")),
-                subnet: network["subnet"].as_str().map(str::to_owned),
+                subnet: nullable_string_field(network, "subnet", "network legacy subnet"),
+                ipam_configs: match network.get("ipam_configs") {
+                    Some(Value::Null) => None,
+                    Some(Value::Array(configs)) => Some(
+                        configs
+                            .iter()
+                            .map(parse_topology_ipam_config)
+                            .collect(),
+                    ),
+                    Some(other) => panic!("network ipam_configs must be an array or null: {other}"),
+                    None => panic!("network ipam_configs is missing: {network}"),
+                },
             })
             .collect();
         let edge_values: Vec<(String, String)> = body["edges"]

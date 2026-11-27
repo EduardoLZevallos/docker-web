@@ -56,6 +56,10 @@ fn edge_set(body: &Value) -> BTreeSet<(String, String)> {
     fixtures::edge_set(body)
 }
 
+fn normalized(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
 fn assert_exact_topology(
     body: &Value,
     expected_containers: &BTreeSet<String>,
@@ -477,16 +481,30 @@ async fn given_network_modes_when_topology_read_then_metadata_and_memberships_ma
                     .iter()
                     .find(|network| network.id.as_deref() == Some(id.as_str()))
                     .unwrap_or_else(|| panic!("independent Docker list omitted {name}"));
-                let docker_subnet = docker_network
+                let docker_configs = docker_network
                     .ipam
                     .as_ref()
-                    .and_then(|ipam| ipam.config.as_ref())
+                    .and_then(|ipam| ipam.config.as_ref());
+                let docker_subnet = docker_configs
                     .and_then(|configs| configs.first())
                     .and_then(|config| config.subnet.clone());
                 assert!(
                     docker_subnet.is_some(),
                     "independent Docker must report a subnet for {name}"
                 );
+                let docker_ipam: Option<Vec<_>> = docker_configs
+                    .map(|configs| {
+                        configs
+                            .iter()
+                            .map(|config| {
+                                (
+                                    normalized(config.subnet.as_deref()).map(str::to_owned),
+                                    normalized(config.gateway.as_deref()).map(str::to_owned),
+                                )
+                            })
+                            .collect()
+                    })
+                    .filter(|configs: &Vec<_>| !configs.is_empty());
                 assert_eq!(docker_network.name.as_deref(), Some(name.as_str()));
                 assert_eq!(docker_network.driver.as_deref(), Some("bridge"));
                 assert_eq!(docker_network.scope.as_deref(), Some("local"));
@@ -506,19 +524,40 @@ async fn given_network_modes_when_topology_read_then_metadata_and_memberships_ma
                 );
                 assert_eq!(api_network["internal"].as_bool(), docker_network.internal);
                 assert_eq!(api_network["subnet"].as_str(), docker_subnet.as_deref());
+                let api_ipam: Option<Vec<_>> = match &api_network["ipam_configs"] {
+                    Value::Null => None,
+                    Value::Array(configs) => Some(
+                        configs
+                            .iter()
+                            .map(|config| {
+                                (
+                                    normalized(config["subnet"].as_str()).map(str::to_owned),
+                                    normalized(config["gateway"].as_str()).map(str::to_owned),
+                                )
+                            })
+                            .collect(),
+                    ),
+                    other => panic!("network ipam_configs must be an array or null: {other}"),
+                };
+                assert_eq!(
+                    api_ipam, docker_ipam,
+                    "network IPAM configs must match independent Docker list data for {name}: {body}"
+                );
             }
 
             let mut expected = BTreeSet::new();
             let mut inspected_attachments: BTreeMap<
                 (String, String),
-                (Option<String>, Option<String>),
+                bollard::models::EndpointSettings,
             > = BTreeMap::new();
+            let mut inspected_states: BTreeMap<String, String> = BTreeMap::new();
             for id in &fixture_ids {
                 let inspect = h
                     .docker
                     .inspect_container(id, None::<InspectContainerOptions>)
                     .await
                     .unwrap();
+                inspected_states.insert(id.clone(), fixtures::state_name(&inspect));
                 let attachments = inspect
                     .network_settings
                     .unwrap_or_default()
@@ -529,8 +568,7 @@ async fn given_network_modes_when_topology_read_then_metadata_and_memberships_ma
                         expected.insert((id.clone(), network_id.clone()));
                     }
                     if name == bridge || name == internal {
-                        inspected_attachments
-                            .insert((id.clone(), name), (attachment.ip_address, attachment.mac_address));
+                        inspected_attachments.insert((id.clone(), name), attachment);
                     }
                 }
             }
@@ -587,14 +625,24 @@ async fn given_network_modes_when_topology_read_then_metadata_and_memberships_ma
             );
             let api_containers = body["containers"].as_array().unwrap();
             for id in &fixture_ids {
-                assert!(
-                    api_containers.iter().any(|container| container["id"] == id.as_str()),
-                    "running network-mode fixture {id} must be visible: {body}"
+                let container = api_containers
+                    .iter()
+                    .find(|container| container["id"] == id.as_str())
+                    .unwrap_or_else(|| {
+                        panic!("running network-mode fixture {id} must be visible: {body}")
+                    });
+                assert_eq!(
+                    container["state"].as_str(),
+                    Some(
+                        inspected_states
+                            .get(id)
+                            .expect("independent Docker inspect state")
+                            .as_str()
+                    ),
+                    "container state must match independent Docker inspect for {id}: {body}"
                 );
             }
-            for ((container_id, network_name), (truth_ip, truth_mac)) in
-                &inspected_attachments
-            {
+            for ((container_id, network_name), truth) in &inspected_attachments {
                 let container = api_containers
                     .iter()
                     .find(|container| container["id"] == container_id.as_str())
@@ -607,28 +655,39 @@ async fn given_network_modes_when_topology_read_then_metadata_and_memberships_ma
                             "API omitted {network_name} attachment for {container_id}: {body}"
                         )
                     });
-                assert!(
-                    attachment.get("ip_address").is_some(),
-                    "attachment must expose ip_address: {attachment}"
+                let truth_network_id = network_manifest.get(network_name).unwrap_or_else(|| {
+                    panic!("independent Docker list omitted network {network_name}")
+                });
+                assert_eq!(
+                    truth.network_id.as_deref(),
+                    Some(truth_network_id.as_str()),
+                    "independent Docker inspect and list disagree on {network_name}"
                 );
-                assert!(
-                    attachment.get("mac_address").is_some(),
-                    "attachment must expose mac_address: {attachment}"
+                assert_eq!(
+                    attachment["network_id"].as_str(),
+                    Some(truth_network_id.as_str()),
+                    "attachment network_id must match independent Docker inspect for {container_id} on {network_name}: {body}"
                 );
-                if let Some(ip) = truth_ip {
-                    assert_eq!(
-                        attachment["ip_address"].as_str(),
-                        Some(ip.as_str()),
-                        "attachment IP must match independent Docker inspect for {container_id} on {network_name}: {body}"
-                    );
-                }
-                if let Some(mac) = truth_mac {
-                    assert_eq!(
-                        attachment["mac_address"].as_str(),
-                        Some(mac.as_str()),
-                        "attachment MAC must match independent Docker inspect for {container_id} on {network_name}: {body}"
-                    );
-                }
+                assert_eq!(
+                    attachment["ipv4_address"].as_str(),
+                    normalized(truth.ip_address.as_deref()),
+                    "attachment ipv4_address must match independent Docker inspect for {container_id} on {network_name}: {body}"
+                );
+                assert_eq!(
+                    attachment["ipv6_address"].as_str(),
+                    normalized(truth.global_ipv6_address.as_deref()),
+                    "attachment ipv6_address must match independent Docker inspect for {container_id} on {network_name}: {body}"
+                );
+                assert_eq!(
+                    attachment["ip_address"].as_str(),
+                    truth.ip_address.as_deref(),
+                    "legacy attachment IP must match independent Docker inspect for {container_id} on {network_name}: {body}"
+                );
+                assert_eq!(
+                    attachment["mac_address"].as_str(),
+                    truth.mac_address.as_deref(),
+                    "attachment MAC must match independent Docker inspect for {container_id} on {network_name}: {body}"
+                );
             }
         })
     })
@@ -713,20 +772,28 @@ async fn given_port_variants_when_containers_read_then_metadata_matches_docker()
                 sleep(Duration::from_millis(100)).await;
             };
             for id in ids {
-                let api_ports = body
+                let row = body
                     .as_array()
                     .unwrap()
                     .iter()
                     .find(|c| c["id"] == id)
-                    .unwrap()["ports"]
-                    .as_array()
                     .unwrap();
+                let api_ports = row["ports"].as_array().unwrap();
                 let inspect = h
                     .docker
                     .inspect_container(&id, None::<InspectContainerOptions>)
                     .await
                     .unwrap();
-                let truth = inspect.network_settings.unwrap().ports.unwrap_or_default();
+                assert_eq!(
+                    row["state"].as_str(),
+                    Some(fixtures::state_name(&inspect).as_str()),
+                    "container state must match independent Docker inspect for {id}: {row}"
+                );
+                let truth = inspect
+                    .network_settings
+                    .unwrap()
+                    .ports
+                    .unwrap_or_default();
                 let exposed = inspect.config.unwrap().exposed_ports.unwrap_or_default();
                 for key in exposed.keys() {
                     let (private, protocol) = key.split_once('/').unwrap();
@@ -739,19 +806,32 @@ async fn given_port_variants_when_containers_read_then_metadata_matches_docker()
                         .collect();
                     let bindings = truth.get(key).and_then(Option::as_ref);
                     assert_eq!(matching.len(), bindings.map_or(1, Vec::len));
+                    for port in &matching {
+                        assert!(
+                            port.get("host_ip").is_some(),
+                            "port must expose host_ip: {port}"
+                        );
+                        assert_eq!(port["private"].as_u64(), private.parse::<u64>().ok());
+                        assert_eq!(port["protocol"], protocol);
+                    }
                     if let Some(bindings) = bindings {
                         for binding in bindings {
                             assert!(
-                                matching
-                                    .iter()
-                                    .any(|p| p["public"].as_u64().map(|v| v.to_string())
-                                        == binding.host_port)
+                                matching.iter().any(|p| {
+                                    p["public"].as_u64().map(|v| v.to_string())
+                                        == binding.host_port
+                                        && normalized(p["host_ip"].as_str())
+                                            == normalized(binding.host_ip.as_deref())
+                                }),
+                                "port binding must preserve public host port and host IP: {key} {binding:?} {matching:?}"
                             );
                         }
                     } else {
                         assert!(
-                            matching.iter().all(|p| p["public"].is_null()),
-                            "unpublished port should have no public port: {key}"
+                            matching.iter().all(|p| {
+                                p["public"].is_null() && p["host_ip"].is_null()
+                            }),
+                            "unpublished port should have no public port or host IP: {key}"
                         );
                     }
                 }
